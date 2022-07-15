@@ -111,7 +111,7 @@ star_A_params = {
     'sptype': 'A2V', 
     'Teff': 10000, 'log_g': 4.28, 'metallicity': -0.5, # Merin et al. 2004
     'dist': 111.6,
-    'flux': 64.02, 'flux_units': 'mJy', 'bp_ref': miri_filter(filt),
+    'flux': 64.02, 'flux_units': 'mJy', 'bp_ref': miri_filter('F1065C'),
     'RA_obj'  :  +237.49061772933,     # RA (decimal deg) of source
     'Dec_obj' :  -03.92120600474,      # Dec (decimal deg) of source
 }
@@ -132,7 +132,7 @@ star_B_params = {
     'sptype': 'M5V', 
     'Teff': 3000, 'log_g': 4.28, 'metallicity': -0.5, # Merin et al. 2004
     'dist': 111.6,
-    'flux': 34.22, 'flux_units': 'mJy', 'bp_ref': miri_filter(filt),
+    'flux': 34.22, 'flux_units': 'mJy', 'bp_ref': miri_filter('F1065C'),
     'RA_obj'  :  237.48904057555,     # RA (decimal deg) of source
     'Dec_obj' :  -03.91981148846,      # Dec (decimal deg) of source
 }
@@ -143,7 +143,7 @@ star_C_params = {
     'sptype': 'M5V', 
     'Teff': 3000, 'log_g': 4.28, 'metallicity': -0.5, # Merin et al. 2004
     'dist': 111.6,
-    'flux': 45.49, 'flux_units': 'mJy', 'bp_ref': miri_filter(filt),
+    'flux': 45.49, 'flux_units': 'mJy', 'bp_ref': miri_filter('F1065C'),
     'RA_obj'  :  237.48871296031,     # RA (decimal deg) of source
     'Dec_obj' :  -03.9196089225,      # Dec (decimal deg) of source
 }
