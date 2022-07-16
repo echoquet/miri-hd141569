@@ -83,8 +83,8 @@ def quick_ref_psf(idl_coord, inst, out_shape, sp=None):
 #%% Simulation parameters
 
 star_A_Q = True
-star_B_Q = True
-star_C_Q = True
+star_B_Q = False
+star_C_Q = False
 psf_sub = False
 export_Q = False
 
@@ -97,7 +97,7 @@ pupil = 'MASKFQPM'
 # Set desired PSF size and oversampling
 # MIRI 4QPM: 24" x24" at 0.11 pixels, so 219x219 pixels
 # MIRISim synthetic datasets: 224 x 288
-fov_pix = 256
+fov_pix = 100 #256
 osamp = 2
 
 
@@ -198,6 +198,15 @@ tel_point = jwst_point(inst.aperturename, ap_ref, star_A_params['RA_obj'], star_
                        pos_ang=pos_ang, base_offset=base_offset, dith_offsets=dith_offsets,
                        base_std=0, dith_std=0)
 
+# Get sci position of center in units of detector pixels
+# Elodie: gives the position of the mask center, in pixels 
+siaf_ap = tel_point.siaf_ap_obs
+x_cen, y_cen = siaf_ap.reference_point('sci')
+
+# Elodie: gives the full frame image size in pixel, inc. oversampling (432x432 with osamp=2)
+ny_pix, nx_pix = (siaf_ap.YSciSize, siaf_ap.XSciSize)
+shape_new = (ny_pix * osamp, nx_pix * osamp)
+
 print(f"Reference aperture: {tel_point.siaf_ap_ref.AperName}")
 print(f"  Nominal RA, Dec = ({tel_point.ra_ref:.6f}, {tel_point.dec_ref:.6f})")
 print(f"Observed aperture: {tel_point.siaf_ap_obs.AperName}")
@@ -216,39 +225,26 @@ as well as RA and Dec.
 Then Computes the PSF, including any offset/dither, using the coefficients.
 It includes geometric distortions based on SIAF info. 
 '''
+# Create stellar spectrum and add to dictionary
+sp_star = make_spec(**star_A_params)
+star_A_params['sp'] = sp_star
+  
 if star_A_Q:
-    # Create stellar spectrum and add to dictionary
-    sp_star = make_spec(**star_A_params)
-    star_A_params['sp'] = sp_star
-    
+  
     # Get `sci` coord positions
     coord_obj = (star_A_params['RA_obj'], star_A_params['Dec_obj'])
     xsci, ysci = tel_point.radec_to_frame(coord_obj, frame_out='sci')
     
     # Create oversampled PSF
     hdul = inst.calc_psf_from_coeff(sp=sp_star, coord_vals=(xsci,ysci), coord_frame='sci')
-    
-    
-    # Get sci position of center in units of detector pixels
-    # Elodie: gives the position of the mask center, in pixels 
-    siaf_ap = tel_point.siaf_ap_obs
-    x_cen, y_cen = siaf_ap.reference_point('sci')
+
     
     # Get the shifts from center and oversampled pixel shifts
     xsci_off, ysci_off = (xsci-x_cen, ysci-y_cen)
-    # xsci_off_over = xsci_off * osamp
-    # ysci_off_over = ysci_off * osamp
     delyx = (ysci_off * osamp, xsci_off * osamp)
-    
     print("Image shifts (oversampled pixels):", delyx) #xsci_off_over, ysci_off_over)
     
-    # fig, ax = plt.subplots(1,1)
-    # ax.imshow(hdul[0].data, vmin=-0.5,vmax=1)
-    
     # Expand PSF to full frame and offset to proper position
-    ny_pix, nx_pix = (siaf_ap.YSciSize, siaf_ap.XSciSize)
-    # ny_pix_over, nx_pix_over = np.array([ny_pix, nx_pix]) * osamp
-    shape_new = (ny_pix * osamp, nx_pix * osamp)
     image_full = pad_or_cut_to_size(hdul[0].data, shape_new, offset_vals=delyx)
     print('Size image (oversampled): {}'.format(image_full.shape))
     
@@ -258,18 +254,6 @@ if star_A_Q:
     # Make new HDUList of target (just central source so far)
     hdul_full = fits.HDUList(fits.PrimaryHDU(data=image_full, header=hdul[0].header))
     
-    
-    # fig, ax = plt.subplots(1,1)
-    # extent = 0.5 * np.array([-1,1,-1,1]) * inst.fov_pix * inst.pixelscale
-    # ax.imshow(hdul_full[0].data, extent=extent, cmap='magma')
-    # ax.set_xlabel('Arcsec')
-    # ax.set_ylabel('Arcsec')
-    # ax.tick_params(axis='both', color='white', which='both')
-    # for k in ax.spines.keys():
-    #     ax.spines[k].set_color('white')
-    # ax.xaxis.get_major_locator().set_params(nbins=9, steps=[1, 2, 5, 10])
-    # ax.yaxis.get_major_locator().set_params(nbins=9, steps=[1, 2, 5, 10])
-    # fig.tight_layout()
 
 #%% Add the stellar companions
 
@@ -285,7 +269,11 @@ if star_B_Q:
     delyx_B = (ystar_B_off * osamp, xstar_B_off * osamp)
     
     image_full_B = pad_or_cut_to_size(hdul_B[0].data, shape_new, offset_vals=delyx_B)
-    hdul_full[0].data += image_full_B
+    
+    if star_A_Q: 
+        hdul_full[0].data += image_full_B
+    else:
+        hdul_full = fits.HDUList(fits.PrimaryHDU(data=image_full_B, header=hdul_B[0].header))
 
 
 if star_C_Q:
@@ -300,7 +288,12 @@ if star_C_Q:
     delyx_C = (ystar_C_off * osamp, xstar_C_off * osamp)
     
     image_full_C = pad_or_cut_to_size(hdul_C[0].data, shape_new, offset_vals=delyx_C)
-    hdul_full[0].data += image_full_C
+    
+    if star_A_Q or star_B_Q: 
+        hdul_full[0].data += image_full_C
+    else:
+        hdul_full = fits.HDUList(fits.PrimaryHDU(data=image_full_C, header=hdul_C[0].header))
+    
 
 # Print the results
 if star_A_Q or star_B_Q or star_C_Q:
@@ -366,7 +359,7 @@ fig1, ax1 = plt.subplots(1,1)
 fig1.suptitle('PSF grid for disk')
 # extent = 0.5 * np.array([-1,1,-1,1]) * inst.fov_pix * inst.pixelscale
 ax1.imshow(psf_grid_summed/len(hdul_psfs) , norm=LogNorm(vmin=0.00001,vmax=0.001))
-fig.tight_layout()
+fig1.tight_layout()
 plt.show()
 
 
@@ -382,7 +375,7 @@ print('Input disk model shape: {}'.format(hdul_disk_model[0].data.shape))
 fig1, ax1 = plt.subplots(1,1)
 fig1.suptitle('disk model input')
 ax1.imshow(hdul_disk_model[0].data, vmin=0,vmax=20)
-fig.tight_layout()
+fig1.tight_layout()
 plt.show()
 
 
@@ -442,7 +435,7 @@ print('Resized disk model shape: {}'.format(im_sci.shape))
 fig1, ax1 = plt.subplots(1,1)
 fig1.suptitle('disk model rotate & resized')
 ax1.imshow(im_sci, vmin=0,vmax=20)
-fig.tight_layout()
+fig1.tight_layout()
 plt.show()
 
 # Added by Elodie June 7th after chat with Kim
@@ -462,13 +455,14 @@ print('Convolved disk shape: {}'.format(im_conv.shape))
 fig1, ax1 = plt.subplots(1,1)
 fig1.suptitle('Convolved disk')
 ax1.imshow(im_conv, vmin=0,vmax=20)
-fig.tight_layout()
+fig1.tight_layout()
 plt.show()
 
 
 # Add cropped image to final oversampled image
 im_conv = pad_or_cut_to_size(im_conv, hdul_full[0].data.shape)
-hdul_full[0].data += im_conv
+if star_A_Q or star_B_Q or star_C_Q:
+    hdul_full[0].data += im_conv
 print('Resized Convolved disk shape: {}'.format(im_conv.shape))
 
 
