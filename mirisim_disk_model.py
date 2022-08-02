@@ -29,6 +29,13 @@ from webbpsf_ext.image_manip import pad_or_cut_to_size
 plt.rcParams['image.origin'] = 'lower'
 plt.rcParams["image.cmap"] = 'gist_heat'#'hot'#'copper'
 
+# TODO: make sure the central star is removed from the model if flag in dictionary is false
+# TODO: Check that the flux matches the simulation (photometry is preserved)
+# Simplify the code to keep the smaller FOV instead of full detector size
+# Remove or make optional the PSF subtraction and derotation
+# convert the code in a pure disk simulation (no star, no psf sibtraction)
+# add support for mcfost (?) or convert into a functionto include in another simulation code
+
 
 #%% Functions
 def make_spec(name=None, sptype=None, flux=None, flux_units=None, bp_ref=None, **kwargs):
@@ -450,7 +457,7 @@ t0 = time()
 im_conv = image_manip.convolve_image(hdul_disk_model_sci, hdul_psfs)
 t1 = time()
 print('Disk Convolution calculation time: {} s'.format(t1-t0))
-print('Convolved disk shape: {}'.format(im_conv.shape))
+print('Convolved disk shape: {}'.format(im_conv.shape)) #260x260
 
 fig1, ax1 = plt.subplots(1,1)
 fig1.suptitle('Convolved disk')
@@ -460,16 +467,18 @@ plt.show()
 
 
 # Add cropped image to final oversampled image
-im_conv = pad_or_cut_to_size(im_conv, hdul_full[0].data.shape)
+im_conv = pad_or_cut_to_size(im_conv, shape_new)
 if star_A_Q or star_B_Q or star_C_Q:
     hdul_full[0].data += im_conv
-print('Resized Convolved disk shape: {}'.format(im_conv.shape))
+else:
+    hdul_full = fits.HDUList(fits.PrimaryHDU(data=im_conv, header=hdul_disk_model_sci[0].header))
+print('Resized Convolved disk shape: {}'.format(im_conv.shape)) #432x432
 
 
 
 # Rebin science data to detector pixels
 im_sci = image_manip.frebin(hdul_full[0].data, scale=1/osamp)
-print('Detector sampled final image shape: {}'.format(im_sci.shape))
+print('Detector sampled final image shape: {}'.format(im_sci.shape)) #216x216
 
 t1_disk =time()
 
