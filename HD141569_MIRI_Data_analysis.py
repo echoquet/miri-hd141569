@@ -345,29 +345,56 @@ print('##### IDENTIFY DATA FILES ### ')
 
 # Parameters to locate / select the datasets:
 # root = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/2_Raw_Synthetic_Data'
-root = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/4_Real_JWST_Data/MIRI_Commissioning/jw01037'
-folder_sci = 'jw01037005001'
-folder_ref = 'jw01037004001'
+# root = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/4_Real_JWST_Data/MIRI_Commissioning/jw01037'
+base_root = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets'
+root_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_CAL2'
+save_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_PROCESSED'
+root = os.path.join(base_root, root_folder)
+path_output = os.path.join(base_root, save_folder)
 
-# version = 'v0'
-# filt = 'F1550C'
 
-inspec_raw = False
+# inspec_raw = True
 inspec_cal1 = False
+data_type = '*_calints.fits'
+
+selected_data_files = np.array(glob(os.path.join(root, data_type)))
+targname_all_list = import_keyword_from_files(selected_data_files, 'TARGNAME', extension=0)
+filt_all_list = import_keyword_from_files(selected_data_files, 'FILTER', extension=0)
+print('Data type: {}'.format(data_type))
+print('Number of files: {}\n'.format(len(selected_data_files)))
+print('All Targets: {}'.format(np.unique(targname_all_list)))
+print('All Filters: {}\n'.format(np.unique(filt_all_list)))
+
+
+filt = 'F1065C'
+targname_sci = 'HD 141569'
+targname_ref = 'HD 140986'
+
+print('SCI Target name: {}'.format(targname_sci))
+print('REF Target name: {}'.format(targname_ref))
+print('Filter: {}'.format(filt))
+
+selected_filt_indices = (filt_all_list == filt)
+selected_sci_indices = (targname_all_list == targname_sci)
+selected_ref_indices = (targname_all_list == targname_ref)
+selected_sci_files = selected_data_files[selected_filt_indices * selected_sci_indices]
+selected_ref_files = selected_data_files[selected_filt_indices * selected_ref_indices]
+
+
 
 
 # Locate the datasets
-print('Root folder:\n {}'.format(root))
-print('SCI folder: {}'.format(folder_sci))
-print('REF folder: {}'.format(folder_ref))
+# print('Root folder:\n {}'.format(root))
+# print('SCI folder: {}'.format(folder_sci))
+# print('REF folder: {}'.format(folder_ref))
 # print('Filter name: {}'.format(filt))
 
 # Paths:
 # path_raw = os.path.join(root, 'MIRI_RAW_Data_Kim', filt)
 # path_cal1 = os.path.join(root, 'MIRI_CAL1', filt)
 # path_cal2 = os.path.join(root, 'MIRI_CAL2', filt)
-path_cal2_sci = os.path.join(root, folder_sci)
-path_cal2_ref = os.path.join(root, folder_ref)
+# path_cal2_sci = os.path.join(root, folder_sci)
+# path_cal2_ref = os.path.join(root, folder_ref)
 
 
 # basename_sci = 'HD141569_'+version+'*MIRIMAGE_'+filt+'exp1'
@@ -377,21 +404,23 @@ path_cal2_ref = os.path.join(root, folder_ref)
 
 # raw_sci_files = glob(os.path.join(path_raw, basename_sci+'.fits'))
 # cal1_sci_files = glob(os.path.join(path_cal1, basename_sci+'_rateints.fits'))
-cal2_sci_files = glob(os.path.join(path_cal2_sci, '*_calints.fits'))
+# cal2_sci_files = glob(os.path.join(path_cal2_sci, '*_calints.fits'))
 # print('Number of RAW SCI files: {}'.format(len(raw_sci_files)))
 # print('Number of CAL1 SCI files (rateints): {}'.format(len(cal1_sci_files)))
-print('Number of CAL2 SCI files (calints): {}'.format(len(cal2_sci_files)))
+print('Number of selected SCI files: {}'.format(len(selected_sci_files)))
 
 # raw_ref_files = glob(os.path.join(path_raw, basename_ref+'.fits'))
 # cal1_ref_files = glob(os.path.join(path_cal1, basename_ref+'_rateints.fits'))
-cal2_ref_files = glob(os.path.join(path_cal2_ref, '*_calints.fits'))
+# cal2_ref_files = glob(os.path.join(path_cal2_ref, '*_calints.fits'))
 # print('Number of RAW REF files: {}'.format(len(raw_ref_files)))
 # print('Number of CAL1 REF files (rateints): {}'.format(len(cal1_ref_files)))
-print('Number of CAL2 REF files (calints): {}'.format(len(cal2_ref_files)))
+print('Number of selected REF files: {}'.format(len(selected_ref_files)))
 
 #%% RAW DATA INSPECTION
-if inspec_raw:
+if data_type == '*_uncal.fits':
     print('##### RAW DATA INSPECTION #####')
+    raw_sci_files = selected_sci_files
+    raw_ref_files = selected_ref_files
     
     # SCIENCE DATASETS RAMPS
     # index -1 gives the end of the ramp, with all the accumulated counts
@@ -532,32 +561,36 @@ if inspec_cal1:
 
 #%% CAL 2 DATA INSPECTION
 print('##### CAL 2 DATA INSPECTION #####')
+if data_type == '*_calints.fits':
+    cal2_sci_files = selected_sci_files
+    cal2_ref_files = selected_ref_files
+
 #number of extensions: 
 #len(fits.open(cal2_sci_files[0]))
-targname_sci_list = np.unique(import_keyword_from_files(cal2_sci_files, 'TARGNAME', extension=0))
-filt_sci_list = import_keyword_from_files(cal2_sci_files, 'FILTER', extension=0)
-targname_ref_list = np.unique(import_keyword_from_files(cal2_ref_files, 'TARGNAME', extension=0))
-filt_ref_list = import_keyword_from_files(cal2_ref_files, 'FILTER', extension=0)
+# targname_sci_list = np.unique(import_keyword_from_files(cal2_sci_files, 'TARGNAME', extension=0))
+# filt_sci_list = import_keyword_from_files(cal2_sci_files, 'FILTER', extension=0)
+# targname_ref_list = np.unique(import_keyword_from_files(cal2_ref_files, 'TARGNAME', extension=0))
+# filt_ref_list = import_keyword_from_files(cal2_ref_files, 'FILTER', extension=0)
 
-if len(targname_sci_list) > 1 or len(targname_ref_list) > 1:
-    raise DatasetError('Mix of several targets')
-else:
-    targname_sci = targname_sci_list[0]
-    targname_ref = targname_ref_list[0]
+# if len(targname_sci_list) > 1 or len(targname_ref_list) > 1:
+#     raise DatasetError('Mix of several targets')
+# else:
+#     targname_sci = targname_sci_list[0]
+#     targname_ref = targname_ref_list[0]
 
-if len(np.unique(np.concatenate((filt_sci_list, filt_ref_list)))) > 1:
-    raise DatasetError('Mix of several filters')
-else:
-    filt = filt_sci_list[0]
+# if len(np.unique(np.concatenate((filt_sci_list, filt_ref_list)))) > 1:
+#     raise DatasetError('Mix of several filters')
+# else:
+#     filt = filt_sci_list[0]
 
-print('SCI TARGET NAME: {}'.format(targname_sci))
-print('REFERENCE NAME: {}'.format(targname_ref))
-print('FILTER: {}'.format(filt))
-print('\n')
+# print('SCI TARGET NAME: {}'.format(targname_sci))
+# print('REFERENCE NAME: {}'.format(targname_ref))
+# print('FILTER: {}'.format(filt))
+# print('\n')
 
 
 if filt == 'F1065C':
-    vmax = 2 #mJy/arcsec^2
+    vmax = 10 #2 #mJy/arcsec^2
 elif filt == 'F1140C':
     vmax = 10
 else:
@@ -638,8 +671,9 @@ plt.show()
 
 #%% DATA COMPBINATION
 debug = False
-display_all = False
-commissioning_dataQ = True
+display_all = True
+verbose = False
+commissioning_dataQ = False
 
 # Values from Aarynn C. / Dean H. after commissioning
 if filt == 'F1065C':
@@ -658,7 +692,7 @@ avg_ref_ints = False
 
 ## Parameters for the background mask. 
 # Croping roughly about the FQPM center before finer registration steps
-bck_cropsize = 131
+bck_cropsize = 151
 crop_center = (np.round(fqpm_center)).astype(int)
 bck_mask_Rin_sci = 50
 bck_mask_Rin_ref = 65
@@ -692,10 +726,9 @@ fqpm_angle = 5 #deg
 
 cropsize = 101
 
-saveCombinedImageQ = False
+saveCombinedImageQ = True
 overWriteQ = True
-path_output = os.path.join(root+'_processed', folder_sci)
-basename_sci = 'tmp'
+basename_sci = 'HD141569_'+filt+'_v1'
 filename_output = basename_sci + '_combined.fits'
 if saveCombinedImageQ:
     os.makedirs(path_output, exist_ok=overWriteQ)
@@ -712,15 +745,16 @@ if saveCombinedImageQ:
 print('--- Cleaning the data from bad pixels ---')
 # NOTE: consider using the DQ maps too
 cal2_sci_cube_filt = median_filter_cube(cal2_sci_cube, median_filt_box_size, median_filt_thresh, 
-                                        iter_max=median_filt_iter_max, verbose=False)
+                                        iter_max=median_filt_iter_max, verbose=verbose)
 cal2_ref_cube_filt = median_filter_cube(cal2_ref_cube, median_filt_box_size, median_filt_thresh, 
-                                        iter_max=median_filt_iter_max, verbose=False)
+                                        iter_max=median_filt_iter_max, verbose=verbose)
 
 if avg_ref_ints:
     cal2_ref_cube_filt_list = np.mean(cal2_ref_cube_filt, axis=1)
 else:
     cal2_ref_cube_filt_list = np.reshape(cal2_ref_cube_filt, (n_ref_files*n_ref_int,)+dims)
 n_ref_frames = len(cal2_ref_cube_filt_list)
+print('Number of reference frames: {}'.format(n_ref_frames))
 
 
 
@@ -764,7 +798,9 @@ cal2_sci_cube_crop = resize(cal2_sci_cube_filt, bck_cropsizes, cent=crop_center)
 cal2_ref_cube_crop = resize(cal2_ref_cube_filt_list, bck_cropsizes, cent=crop_center)
 
 # Optimize the masks
-bck_mask_sci = create_mask(bck_mask_Rin_sci, bck_cropsizes)
+binary_coords = bck_cropsize/2 + np.array([-90, 20])
+bck_mask_sci = create_mask(bck_mask_Rin_sci, bck_cropsizes) 
+bck_mask_sci *= create_mask(bck_mask_Rin_sci, bck_cropsizes, cent=binary_coords)
 bck_mask_ref = create_mask(bck_mask_Rin_ref, bck_cropsizes)
 if bck_saber_glow_mask:
     bck_saber_mask = create_saber_mask(bck_cropsizes, bck_cropsizes//2, bck_saber_glow_width, bck_saber_glow_angle)
@@ -829,6 +865,10 @@ elif subtract_method =='classical-Ref-Averaged':
 print('--- Combining integrations within rolls ---')
 combined_roll_images = np.mean(cal2_sci_cube_psf_sub, axis=1)
 
+# Patch to remove nan values
+nan_poses = np.argwhere(np.isnan(combined_roll_images))
+for i, inds in enumerate(nan_poses):
+    combined_roll_images[inds[0], inds[1], inds[2]] = 0
 
 # Creates a 4QPM mask for the combination
 fqpm_mask = create_fqpm_mask(bck_cropsizes, bck_cropsizes//2, fqpm_width, fqpm_angle)
@@ -859,10 +899,23 @@ print('--- Derotate and combine rolls ---')
 derotated_images = np.empty(np.shape(combined_roll_images))
 fqpm_mask_roll_derotated = np.empty(np.shape(fqpm_mask_roll))
 for i in range(n_sci_files):
-    derotated_images[i] = frame_rotate_interp(combined_roll_images[i], PA_V3_sci[i])
-    fqpm_mask_roll_derotated[i] = frame_rotate_interp(fqpm_mask_roll[i], PA_V3_sci[i])
+    derotated_images[i] = frame_rotate_interp(combined_roll_images[i], -PA_V3_sci[i])
+    fqpm_mask_roll_derotated[i] = frame_rotate_interp(fqpm_mask_roll[i], -PA_V3_sci[i])
 nanPoses = (fqpm_mask_roll_derotated > 0.5)
 derotated_images[nanPoses] = np.nan
+
+fig6, ax6 = plt.subplots(1,n_sci_files,figsize=(8,4), dpi=130)
+fig6.suptitle('ROLLS HD141569  '+filt)
+images = []
+for i in range(n_sci_files):
+    # images.append(ax5[i].imshow(combined_roll_images[i,:,:], vmin=vmin_lin, vmax=vmax))
+    images.append(ax6[i].imshow(fqpm_mask_roll_derotated[i,:,:], norm=LogNorm(vmin=vmax/100, vmax=vmax)))
+    ax6[i].set_title('ORIENT {}: {}deg'.format(i, PA_V3_sci[i]))
+plt.tight_layout()
+cbar = fig6.colorbar(images[0], ax=ax6)
+cbar.ax.set_title('mJy.arcsec$^{-2}$')
+plt.show()
+
 
 
 ### Combine the two rolls and crop it
@@ -875,8 +928,8 @@ print('Total flux in image: {:.3f} mJy'.format(np.nansum(combined_image)*0.11*0.
 # vmin = 0.1 #median_val*0.8
 # vmax = 10 #3 #max_val*0.7
 fig7, ax7 = plt.subplots(1,1,figsize=(8,6), dpi=130)
-# im = ax7.imshow(combined_image, norm=LogNorm(vmin=vmax/500, vmax=vmax))#,origin='upper')
-im = ax7.imshow(-combined_image, vmin=-vmax, vmax=vmax)#,origin='upper')
+# im = ax7.imshow(combined_image, norm=LogNorm(vmin=vmax/100, vmax=vmax))
+im = ax7.imshow(combined_image, vmin=vmin_lin, vmax=vmax)
 ax7.set_title('COMBINED HD141569  '+filt)
 plt.tight_layout()
 cbar = fig7.colorbar(im, ax=ax7)
