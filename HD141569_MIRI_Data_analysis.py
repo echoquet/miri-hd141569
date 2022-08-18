@@ -103,11 +103,11 @@ def create_box_mask(dims, center, box_sizes):
 
 
 def create_fqpm_mask(dims, center, width, angle):
-    fqpm_mask_tmp = np.zeros(dims)
-    fqpm_mask_tmp[center[0] - width//2 : center[0] + width//2, :] =1
-    fqpm_mask_tmp[:, center[1] - width//2 : center[1] + width//2] =1
-    fqpm_mask = frame_rotate_interp(fqpm_mask_tmp, angle, center=center)
-    return fqpm_mask
+    fqpm_mask_tmp = np.ones(dims)
+    fqpm_mask_tmp[center[0] - width//2 : center[0] + width//2, :] = 0
+    fqpm_mask_tmp[:, center[1] - width//2 : center[1] + width//2] = 0
+    fqpm_mask = np.round(frame_rotate_interp(fqpm_mask_tmp, angle, center=center, cval=1))
+    return fqpm_mask.astype(bool)
 
 
 def create_saber_mask(dims, center, width, angle):
@@ -352,30 +352,41 @@ def median_filter_cube(cube, box_half_size, threshold, iter_max=10000, verbose=T
     return cube_filtered
 
 
-def display_grid_of_images_from_cube(cube, vmax, suptitle='', imtitle_array=None, logNorm=True, dpi=130):
+def display_grid_of_images_from_cube(cube, vmax, suptitle='', imtitle_array=None, logNorm=True, vmin=None, dpi=130, imsize=2):
     dims = np.shape(cube)
     ndims = len(dims)
     if ndims == 4:
         nrow, ncol = dims[0:2]
-        cube2 = cube
     elif ndims == 3:
-        nrow = dims[0]
-        ncol = 1
-        cube2 = np.reshape(cube, (dims[0], 1, dims[1], dims[2]))
+        nrow = 1
+        ncol = dims[0]
     else:
         raise TypeError('Cube should be 3D or 4D')
-        
-    fig, ax = plt.subplots(nrow, ncol, figsize=(2*ncol, 2*nrow), dpi=130)
+    
+    if vmin is None:
+        vmin = vmax/1000 if logNorm else 0
+    
+    fig, ax = plt.subplots(nrow, ncol, figsize=(imsize*ncol, imsize*nrow), dpi=dpi)
     fig.suptitle(suptitle)
     images = []
-    for i in range(nrow):
-        for j in range(ncol):
+    if ndims == 4:
+        for i in range(nrow):
+            for j in range(ncol):
+                if logNorm:
+                    images.append(ax[i,j].imshow(cube[i,j,:,:], norm=LogNorm(vmin=vmin, vmax=vmax)))
+                else:
+                    images.append(ax[i,j].imshow(cube[i,j,:,:], vmin=vmin, vmax=vmax))
+                if imtitle_array is not None:
+                    ax[i,j].set_title(imtitle_array[i,j])
+    elif ndims == 3:
+        for i in range(ncol):
             if logNorm:
-                images.append(ax[i,j].imshow(cube2[i,j,:,:], norm=LogNorm(vmin=vmax/100, vmax=vmax)))
+                images.append(ax[i].imshow(cube[i,:,:], norm=LogNorm(vmin=vmin, vmax=vmax)))
             else:
-                images.append(ax[i,j].imshow(cube2[i,j,:,:], vmin=0, vmax=vmax))
+                images.append(ax[i].imshow(cube[i,:,:], vmin=vmin, vmax=vmax))
             if imtitle_array is not None:
-                ax[i,j].set_title(imtitle_array[i,j])
+                ax[i].set_title(imtitle_array[i])
+                
     plt.tight_layout()
     cbar = fig.colorbar(images[0], ax=ax)
     cbar.ax.set_title('mJy.arcsec$^{-2}$')
@@ -920,28 +931,17 @@ nan_poses = np.argwhere(np.isnan(combined_roll_images))
 for i, inds in enumerate(nan_poses):
     combined_roll_images[inds[0], inds[1], inds[2]] = 0
 
+display_grid_of_images_from_cube(combined_roll_images, vmax, #logNorm=False,
+                                 suptitle='ROLLS HD141569  '+filt,imsize=4)
+
+
 # Creates a 4QPM mask for the combination
 fqpm_mask = create_fqpm_mask(dims, np.round(fqpm_center).astype(int), fqpm_width, fqpm_angle)
 fqpm_mask_roll = np.tile(fqpm_mask, (n_sci_files,1,1))
 
-fig8, ax8 = plt.subplots(1,n_sci_files,figsize=(n_sci_files*3,3), dpi=130)
-for i in range(n_sci_files):
-    # ax8[i].imshow((1-fqpm_mask)*combined_roll_images[i], vmin=vmin_lin, vmax=vmax)
-    ax8[i].imshow((1-fqpm_mask)*combined_roll_images[i], norm=LogNorm(vmin=vmax/1000, vmax=vmax))
+display_grid_of_images_from_cube(combined_roll_images*fqpm_mask_roll, vmax, imsize=4)
 
-# vmin = 0 #median_val*0.8
-# vmax = 2 #3 #max_val*0.7
-fig5, ax5 = plt.subplots(1,n_sci_files,figsize=(8,4), dpi=130)
-fig5.suptitle('ROLLS HD141569  '+filt)
-images = []
-for i in range(n_sci_files):
-    # images.append(ax5[i].imshow(combined_roll_images[i,:,:], vmin=vmin_lin, vmax=vmax))
-    images.append(ax5[i].imshow(combined_roll_images[i,:,:], norm=LogNorm(vmin=vmax/100, vmax=vmax)))
-    ax5[i].set_title('ORIENT {}: {}deg'.format(i, PA_V3_sci[i]))
-plt.tight_layout()
-cbar = fig5.colorbar(images[0], ax=ax5)
-cbar.ax.set_title('mJy.arcsec$^{-2}$')
-plt.show()
+
 
 
 ### Derotate each roll
@@ -950,21 +950,12 @@ derotated_images = np.empty(np.shape(combined_roll_images))
 fqpm_mask_roll_derotated = np.empty(np.shape(fqpm_mask_roll))
 for i in range(n_sci_files):
     derotated_images[i] = frame_rotate_interp(combined_roll_images[i], -PA_V3_sci[i], center=star_center_sci)
-    fqpm_mask_roll_derotated[i] = frame_rotate_interp(fqpm_mask_roll[i], -PA_V3_sci[i], center=star_center_sci)
-nanPoses = (fqpm_mask_roll_derotated > 0.5)
+    fqpm_mask_roll_derotated[i] = frame_rotate_interp(fqpm_mask_roll[i].astype(float), -PA_V3_sci[i], center=star_center_sci, cval=1)
+nanPoses = (fqpm_mask_roll_derotated < 0.5)
 derotated_images[nanPoses] = np.nan
 
-fig6, ax6 = plt.subplots(1,n_sci_files,figsize=(8,4), dpi=130)
-fig6.suptitle('ROLLS HD141569  '+filt)
-images = []
-for i in range(n_sci_files):
-    images.append(ax6[i].imshow(derotated_images[i,:,:], norm=LogNorm(vmin=vmax/100, vmax=vmax)))
-    # images.append(ax6[i].imshow(fqpm_mask_roll_derotated[i,:,:], norm=LogNorm(vmin=vmax/100, vmax=vmax)))
-    ax6[i].set_title('ORIENT {}: {}deg'.format(i, PA_V3_sci[i]))
-plt.tight_layout()
-cbar = fig6.colorbar(images[0], ax=ax6)
-cbar.ax.set_title('mJy.arcsec$^{-2}$')
-plt.show()
+display_grid_of_images_from_cube(derotated_images, vmax, #logNorm=False,
+                                 suptitle='Rerotated ROLLS HD141569  '+filt,imsize=4)
 
 
 
@@ -978,8 +969,8 @@ print('Total flux in image: {:.3f} mJy'.format(np.nansum(combined_image)*0.11*0.
 # vmin = 0.1 #median_val*0.8
 # vmax = 10 #3 #max_val*0.7
 fig7, ax7 = plt.subplots(1,1,figsize=(8,6), dpi=130)
-# im = ax7.imshow(combined_image, norm=LogNorm(vmin=vmax/100, vmax=vmax))
-im = ax7.imshow(combined_image, vmin=vmin_lin, vmax=vmax)
+im = ax7.imshow(combined_image, norm=LogNorm(vmin=vmax/100, vmax=vmax))
+# im = ax7.imshow(combined_image, vmin=vmin_lin, vmax=vmax)
 ax7.set_title('COMBINED HD141569  '+filt)
 plt.tight_layout()
 cbar = fig7.colorbar(im, ax=ax7)
