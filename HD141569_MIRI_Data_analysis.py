@@ -91,6 +91,17 @@ def create_elliptical_annulus(rIn, rOut, inc, pa, shape, cent=None):
     return mask
 
 
+def create_box_mask(dims, center, box_sizes):
+    square_mask = np.ones(dims)
+    
+    y1i, y1f = resize_list_limits(dims[0], box_sizes[0], cent1=center[0])
+    x1i, x1f = resize_list_limits(dims[1], box_sizes[1], cent1=center[1])
+    
+    square_mask[y1i:y1f, x1i:x1f] *= 0 
+    
+    return square_mask.astype(bool)
+
+
 def create_fqpm_mask(dims, center, width, angle):
     fqpm_mask_tmp = np.zeros(dims)
     fqpm_mask_tmp[center[0] - width//2 : center[0] + width//2, :] =1
@@ -100,11 +111,11 @@ def create_fqpm_mask(dims, center, width, angle):
 
 
 def create_saber_mask(dims, center, width, angle):
-    saber_mask_tmp = np.zeros(dims)
-    saber_mask_tmp[center[0] - width//2 : center[0] + width//2, :] =1
+    saber_mask_tmp = np.ones(dims)
+    saber_mask_tmp[center[0] - width//2 : center[0] + width//2, :] = 0
     # saber_mask_tmp[:, center[1] - width//2 : center[1] + width//2] =1
-    saber_mask = np.round(frame_rotate_interp(saber_mask_tmp, angle, center=center)).astype(int)
-    return saber_mask
+    saber_mask = np.round(frame_rotate_interp(saber_mask_tmp, angle, center=center, cval=1))
+    return saber_mask.astype(bool)
 
 
 ### DEPRECATED
@@ -700,34 +711,39 @@ plt.show()
 
 
 #%% DATA COMPBINATION
+
+#***** Defining a set of custom parameters *****
 debug = False
 display_all = True
 verbose = False
 
-# Values from Aarynn C. / Dean H. after commissioning
-if filt == 'F1065C':
-    fqpm_center = [111.89, 120.81]
-elif filt == 'F1140C':
-    fqpm_center = [112.20, 119.99]
-else:
-    fqpm_center=[113.33, 119.84]
 
-## Parameters for Median-filter
+## Parameters for Median-filtering the bad pixels:
 median_filt_thresh = 3 #sigma
 median_filt_box_size = 2
 median_filt_iter_max = 20
 
 
-## Parameters for the background mask. 
-# Croping roughly about the FQPM center before finer registration steps
-bck_cropsize = 201
-crop_center = (np.round(fqpm_center)).astype(int)
+## 4QPM mask centers:
+# Values from Aarynn C. / Dean H. after commissioning. 
+# Will eventually be in the header as CRPIX1 and CRPIX2 or in CRDS
+if filt == 'F1065C':
+    fqpm_center = np.array([111.89, 120.81])
+elif filt == 'F1140C':
+    fqpm_center = np.array([112.20, 119.99])
+else:
+    fqpm_center = np.array([113.33, 119.84])
+
+
+## Parameters for background subtraction: 
+bck_subtraction_method = 'uniform'   # 'uniform'  'bck_frames'
+bck_mask_size = 201
 bck_mask_Rin_sci = 50
 bck_mask_Rin_ref = 65
+# bck_mask_Rout = 105
 bck_saber_glow_mask = True
 bck_saber_glow_width = 9 #pix
 bck_saber_glow_angle = 5 #deg
-# bck_mask_Rout = 105
 
 
 
@@ -744,10 +760,9 @@ else:
 # Parameters for 4QPM mask and data combination
 # TODO: use CDBS calibration mask instead!
 # fqpm_center = crop_center     # TMP for synthetic dataset! use header instead
+# crop_center = (np.round(fqpm_center)).astype(int)
 fqpm_width = 3 #pix
 fqpm_angle = 5 #deg
-
-# PA_V3_sci = [35, 49] if filt=='F1065C' else [130, 144] # TMP for synthetic datasets!
 
 cropsize = 101
 
@@ -770,27 +785,20 @@ if saveCombinedImageQ:
 '''
 
 
-### Cleaning the bad pixels from the SCI and REF datasets
+#****** Cleaning the bad pixels  ******
 print('--- Cleaning the data from bad pixels ---')
 # NOTE: consider using the DQ maps too
-cal2_sci_cube_filt = median_filter_cube(cal2_sci_cube, median_filt_box_size, median_filt_thresh, 
+cal2_sci_cube_clean = median_filter_cube(cal2_sci_cube, median_filt_box_size, median_filt_thresh, 
                                         iter_max=median_filt_iter_max, verbose=verbose)
-cal2_ref_cube_filt = median_filter_cube(cal2_ref_cube, median_filt_box_size, median_filt_thresh, 
+cal2_ref_cube_clean = median_filter_cube(cal2_ref_cube, median_filt_box_size, median_filt_thresh, 
                                         iter_max=median_filt_iter_max, verbose=verbose)
 
-# if avg_ref_ints:
-#     cal2_ref_cube_filt_list = np.mean(cal2_ref_cube_filt, axis=1)
-# else:
-#     cal2_ref_cube_filt_list = np.reshape(cal2_ref_cube_filt, (n_ref_files*n_ref_int,)+dims)
-# n_ref_frames = len(cal2_ref_cube_filt_list)
-# print('Number of reference frames: {}'.format(n_ref_frames))
 
 
-
-### Register the frames
+#****** Frame Registration  ******
 # TODO: Register the SCI frames with companion
 # TODO: Register the REF frames?
-# TODO: update to using the 4D cal2_ref_cube_filt cube again instead of cal2_ref_cube_filt_list
+# TODO: update to using the 4D cal2_ref_cube_clean cube again instead of cal2_ref_cube_filt_list
 if debug:
     template = cal2_ref_cube_filt_list[0]
     reg_mask = ~create_mask(40, dims, cent=crop_center)  #np.ones(dims, dtype=bool)
@@ -818,46 +826,51 @@ if debug:
     plt.show()
 
 
-### Crop and subtract the background
+star_center_sci = fqpm_center
+star_center_ref = fqpm_center
+
+
+#****** Background subtraction  ******
+print('--- Subtracting the background level ---')
 # Note: here we assume the background is spatially invariant.
 # If this is not the case, use the mean across the N integrations and M rolls.
 # If it is *verry* spatially variant, use an elliptical mask and mean across the N integration per roll.
-print('--- Cropping & Subtracting the background level ---')
-bck_cropsizes = np.array((bck_cropsize, bck_cropsize))
-cal2_sci_cube_crop = resize(cal2_sci_cube_filt, bck_cropsizes, cent=crop_center)
-cal2_ref_cube_crop = resize(cal2_ref_cube_filt, bck_cropsizes, cent=crop_center)
+
+# bck_mask_sizes = np.array((bck_mask_size, bck_mask_size))
+# cal2_sci_cube_crop = resize(cal2_sci_cube_clean, bck_mask_sizes, cent=crop_center)
+# cal2_ref_cube_crop = resize(cal2_ref_cube_clean, bck_mask_sizes, cent=crop_center)
 
 # Optimize the masks
-binary_coords = bck_cropsize/2 + np.array([-90, 20])
-bck_mask_sci = create_mask(bck_mask_Rin_sci, bck_cropsizes) 
-bck_mask_sci *= create_mask(bck_mask_Rin_sci, bck_cropsizes, cent=binary_coords)
-bck_mask_ref = create_mask(bck_mask_Rin_ref, bck_cropsizes)
+companion_stars_coords = fqpm_center + np.array([-90, 20])
+bck_mask_sizes = np.array((bck_mask_size, bck_mask_size))
+bck_mask_box = ~create_box_mask(dims, np.round(star_center_sci).astype(int), bck_mask_sizes)
+bck_mask_sci = create_mask(bck_mask_Rin_sci, dims, cent=star_center_sci) * bck_mask_box
+bck_mask_sci *= create_mask(bck_mask_Rin_sci, dims, cent=companion_stars_coords)
+bck_mask_ref = create_mask(bck_mask_Rin_ref, dims, cent=star_center_ref) * bck_mask_box
 if bck_saber_glow_mask:
-    bck_saber_mask = create_saber_mask(bck_cropsizes, bck_cropsizes//2, bck_saber_glow_width, bck_saber_glow_angle)
-    bck_mask_sci = bck_mask_sci * ~(bck_saber_mask.astype(bool))
-    bck_mask_ref = bck_mask_ref * ~(bck_saber_mask.astype(bool))
-# bck_saber_glow_width = 5 #pix
-# bck_saber_glow_angle = 10 #deg
+    bck_saber_mask = create_saber_mask(dims, np.round(fqpm_center).astype(int), bck_saber_glow_width, bck_saber_glow_angle)
+    bck_mask_sci = bck_mask_sci * bck_saber_mask
+    bck_mask_ref = bck_mask_ref * bck_saber_mask
 
 if display_all:
     fig10, ax10 = plt.subplots(1,1,figsize=(8,6), dpi=130)
-    ax10.imshow(bck_mask_sci*np.mean(cal2_sci_cube_crop,axis=(0,1)), norm=LogNorm(vmin=0.02, vmax=0.5))
+    ax10.imshow(bck_mask_sci*np.mean(cal2_sci_cube_clean,axis=(0,1)), norm=LogNorm(vmin=0.02, vmax=0.5))
     # ax10.imshow(bck_mask_sci, vmin=0, vmax=1)
     
     fig11, ax11 = plt.subplots(1,1,figsize=(8,6), dpi=130)
-    ax11.imshow(bck_mask_ref*np.mean(cal2_ref_cube_crop,axis=(0,1)), norm=LogNorm(vmin=0.02, vmax=0.5))
+    ax11.imshow(bck_mask_ref*np.mean(cal2_ref_cube_clean,axis=(0,1)), norm=LogNorm(vmin=0.02, vmax=0.5))
     
-    print('Number of NaNs in SCI: {}'.format(np.count_nonzero(np.isnan(cal2_sci_cube_crop[:, :, bck_mask_sci]))))
-    print('Number of NaNs in REF: {}'.format(np.count_nonzero(np.isnan(cal2_ref_cube_crop[:, :, bck_mask_sci]))))
+    print('Number of NaNs in SCI: {}'.format(np.count_nonzero(np.isnan(cal2_sci_cube_clean[:, :, bck_mask_sci]))))
+    print('Number of NaNs in REF: {}'.format(np.count_nonzero(np.isnan(cal2_ref_cube_clean[:, :, bck_mask_sci]))))
     
 # Estimate and subtract the background levels
-bck_level_sci = np.nanmedian(cal2_sci_cube_crop[:, :, bck_mask_sci])
-bck_level_ref = np.nanmedian(cal2_ref_cube_crop[:, :, bck_mask_ref])
+bck_level_sci = np.nanmedian(cal2_sci_cube_clean[:, :, bck_mask_sci])
+bck_level_ref = np.nanmedian(cal2_ref_cube_clean[:, :, bck_mask_ref])
 print('Background_level SCI = {:.2e} mJy.arcsec^-2'.format(bck_level_sci))
 print('Background_level REF = {:.2e} mJy.arcsec^-2'.format(bck_level_ref))
 
-cal2_sci_cube_bck_sub = cal2_sci_cube_crop - np.tile(bck_level_sci, (n_sci_files, n_sci_int, 1, 1))
-cal2_ref_cube_bck_sub = cal2_ref_cube_crop - np.tile(bck_level_ref, (n_ref_files, n_ref_int, 1, 1))
+cal2_sci_cube_bck_sub = cal2_sci_cube_clean - np.tile(bck_level_sci, (n_sci_files, n_sci_int, 1, 1))
+cal2_ref_cube_bck_sub = cal2_ref_cube_clean - np.tile(bck_level_ref, (n_ref_files, n_ref_int, 1, 1))
 
 display_grid_of_images_from_cube(cal2_sci_cube_bck_sub, vmax/3, #logNorm=False,
                                  suptitle='Background subtracted Integrations HD141569  '+filt)
@@ -908,13 +921,13 @@ for i, inds in enumerate(nan_poses):
     combined_roll_images[inds[0], inds[1], inds[2]] = 0
 
 # Creates a 4QPM mask for the combination
-fqpm_mask = create_fqpm_mask(bck_cropsizes, bck_cropsizes//2, fqpm_width, fqpm_angle)
+fqpm_mask = create_fqpm_mask(dims, np.round(fqpm_center).astype(int), fqpm_width, fqpm_angle)
 fqpm_mask_roll = np.tile(fqpm_mask, (n_sci_files,1,1))
 
 fig8, ax8 = plt.subplots(1,n_sci_files,figsize=(n_sci_files*3,3), dpi=130)
 for i in range(n_sci_files):
-    ax8[i].imshow((1-fqpm_mask)*combined_roll_images[i], vmin=vmin_lin, vmax=vmax)
-    # ax8[i].imshow((1-fqpm_mask)*combined_roll_images[i], norm=LogNorm(vmin=vmax/100, vmax=vmax))
+    # ax8[i].imshow((1-fqpm_mask)*combined_roll_images[i], vmin=vmin_lin, vmax=vmax)
+    ax8[i].imshow((1-fqpm_mask)*combined_roll_images[i], norm=LogNorm(vmin=vmax/1000, vmax=vmax))
 
 # vmin = 0 #median_val*0.8
 # vmax = 2 #3 #max_val*0.7
@@ -936,8 +949,8 @@ print('--- Derotate and combine rolls ---')
 derotated_images = np.empty(np.shape(combined_roll_images))
 fqpm_mask_roll_derotated = np.empty(np.shape(fqpm_mask_roll))
 for i in range(n_sci_files):
-    derotated_images[i] = frame_rotate_interp(combined_roll_images[i], -PA_V3_sci[i])
-    fqpm_mask_roll_derotated[i] = frame_rotate_interp(fqpm_mask_roll[i], -PA_V3_sci[i])
+    derotated_images[i] = frame_rotate_interp(combined_roll_images[i], -PA_V3_sci[i], center=star_center_sci)
+    fqpm_mask_roll_derotated[i] = frame_rotate_interp(fqpm_mask_roll[i], -PA_V3_sci[i], center=star_center_sci)
 nanPoses = (fqpm_mask_roll_derotated > 0.5)
 derotated_images[nanPoses] = np.nan
 
@@ -945,8 +958,8 @@ fig6, ax6 = plt.subplots(1,n_sci_files,figsize=(8,4), dpi=130)
 fig6.suptitle('ROLLS HD141569  '+filt)
 images = []
 for i in range(n_sci_files):
-    # images.append(ax5[i].imshow(combined_roll_images[i,:,:], vmin=vmin_lin, vmax=vmax))
-    images.append(ax6[i].imshow(fqpm_mask_roll_derotated[i,:,:], norm=LogNorm(vmin=vmax/100, vmax=vmax)))
+    images.append(ax6[i].imshow(derotated_images[i,:,:], norm=LogNorm(vmin=vmax/100, vmax=vmax)))
+    # images.append(ax6[i].imshow(fqpm_mask_roll_derotated[i,:,:], norm=LogNorm(vmin=vmax/100, vmax=vmax)))
     ax6[i].set_title('ORIENT {}: {}deg'.format(i, PA_V3_sci[i]))
 plt.tight_layout()
 cbar = fig6.colorbar(images[0], ax=ax6)
@@ -957,7 +970,7 @@ plt.show()
 
 ### Combine the two rolls and crop it
 combined_image_full = np.nanmean(derotated_images, axis=0)
-combined_image = resize(combined_image_full, [cropsize,cropsize]) 
+combined_image = resize(combined_image_full, [cropsize,cropsize], cent=np.round(star_center_sci).astype(int)) 
 
 
 print('Total flux in image: {:.3f} mJy'.format(np.nansum(combined_image)*0.11*0.11))
