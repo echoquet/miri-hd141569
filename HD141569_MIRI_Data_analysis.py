@@ -340,6 +340,36 @@ def median_filter_cube(cube, box_half_size, threshold, iter_max=10000, verbose=T
         print('Number of iterations: {}'.format(it))
     return cube_filtered
 
+
+def display_grid_of_images_from_cube(cube, vmax, suptitle='', imtitle_array=None, logNorm=True, dpi=130):
+    dims = np.shape(cube)
+    ndims = len(dims)
+    if ndims == 4:
+        nrow, ncol = dims[0:2]
+        cube2 = cube
+    elif ndims == 3:
+        nrow = dims[0]
+        ncol = 1
+        cube2 = np.reshape(cube, (dims[0], 1, dims[1], dims[2]))
+    else:
+        raise TypeError('Cube should be 3D or 4D')
+        
+    fig, ax = plt.subplots(nrow, ncol, figsize=(2*ncol, 2*nrow), dpi=130)
+    fig.suptitle(suptitle)
+    images = []
+    for i in range(nrow):
+        for j in range(ncol):
+            if logNorm:
+                images.append(ax[i,j].imshow(cube2[i,j,:,:], norm=LogNorm(vmin=vmax/100, vmax=vmax)))
+            else:
+                images.append(ax[i,j].imshow(cube2[i,j,:,:], vmin=0, vmax=vmax))
+            if imtitle_array is not None:
+                ax[i,j].set_title(imtitle_array[i,j])
+    plt.tight_layout()
+    cbar = fig.colorbar(images[0], ax=ax)
+    cbar.ax.set_title('mJy.arcsec$^{-2}$')
+    plt.show()
+
 #%%
 print('##### IDENTIFY DATA FILES ### ')
 
@@ -594,7 +624,7 @@ if filt == 'F1065C':
 elif filt == 'F1140C':
     vmax = 10
 else:
-    vmax=3
+    vmax= 20
 vmin_lin = 0
 vmin_log = vmax/100
 
@@ -688,11 +718,10 @@ median_filt_thresh = 3 #sigma
 median_filt_box_size = 2
 median_filt_iter_max = 20
 
-avg_ref_ints = False
 
 ## Parameters for the background mask. 
 # Croping roughly about the FQPM center before finer registration steps
-bck_cropsize = 151
+bck_cropsize = 201
 crop_center = (np.round(fqpm_center)).astype(int)
 bck_mask_Rin_sci = 50
 bck_mask_Rin_ref = 65
@@ -703,18 +732,17 @@ bck_saber_glow_angle = 5 #deg
 
 
 
-## PSF subtraction
+## Parameters for the PSF subtraction
 subtract_method = 'classical-Ref-Averaged' # 'classical-Ref-Averaged'  'No-Subtraction'
 if filt == 'F1065C':
-    sci_ref_th_ratio = 64.02/469.45
+    sci_ref_th_ratio = 64.42/1257.45  #64.02/469.45
 elif filt == 'F1140C':
-    sci_ref_th_ratio = 56.07/410.48
+    sci_ref_th_ratio = 56.72/1109.31   #56.07/410.48
 else:
-    sci_ref_th_ratio = 30.71/223.75
-# 4.655 sci W3 mag
-# 4.531 ref W3 mag
+    sci_ref_th_ratio = 30.65/595.52   #30.71/223.75
+
 if commissioning_dataQ:
-    sci_ref_th_ratio = 10**((4.531-4.655)/2.5)
+    sci_ref_th_ratio = 10**((4.531-4.655)/2.5) # from W3 mag
 
 # Parameters for 4QPM mask and data combination
 # TODO: use CDBS calibration mask instead!
@@ -726,12 +754,16 @@ fqpm_angle = 5 #deg
 
 cropsize = 101
 
+# Parameters for exporting the outputs
+export_tmp_filesQ = True
 saveCombinedImageQ = True
 overWriteQ = True
 basename_sci = 'HD141569_'+filt+'_v1'
 filename_output = basename_sci + '_combined.fits'
 if saveCombinedImageQ:
     os.makedirs(path_output, exist_ok=overWriteQ)
+
+
 
 ''' Reduction notes:
     To achieve the subtraction of the PSF, both SCI and REF must be background-subtracted.
@@ -749,18 +781,19 @@ cal2_sci_cube_filt = median_filter_cube(cal2_sci_cube, median_filt_box_size, med
 cal2_ref_cube_filt = median_filter_cube(cal2_ref_cube, median_filt_box_size, median_filt_thresh, 
                                         iter_max=median_filt_iter_max, verbose=verbose)
 
-if avg_ref_ints:
-    cal2_ref_cube_filt_list = np.mean(cal2_ref_cube_filt, axis=1)
-else:
-    cal2_ref_cube_filt_list = np.reshape(cal2_ref_cube_filt, (n_ref_files*n_ref_int,)+dims)
-n_ref_frames = len(cal2_ref_cube_filt_list)
-print('Number of reference frames: {}'.format(n_ref_frames))
+# if avg_ref_ints:
+#     cal2_ref_cube_filt_list = np.mean(cal2_ref_cube_filt, axis=1)
+# else:
+#     cal2_ref_cube_filt_list = np.reshape(cal2_ref_cube_filt, (n_ref_files*n_ref_int,)+dims)
+# n_ref_frames = len(cal2_ref_cube_filt_list)
+# print('Number of reference frames: {}'.format(n_ref_frames))
 
 
 
 ### Register the frames
 # TODO: Register the SCI frames with companion
 # TODO: Register the REF frames?
+# TODO: update to using the 4D cal2_ref_cube_filt cube again instead of cal2_ref_cube_filt_list
 if debug:
     template = cal2_ref_cube_filt_list[0]
     reg_mask = ~create_mask(40, dims, cent=crop_center)  #np.ones(dims, dtype=bool)
@@ -775,7 +808,7 @@ if debug:
         message = '     dx = {:.3f}"    dy = {:.3f}"    nu = {:.2f}    crit = {:.2f}'
         print(message.format(dx*0.11, dy*0.11, nu, reg_crit))
     
-    
+    #display_grid_of_images_from_cube(cal2_ref_cube_filt, vmax/30)
     fig13, ax13 = plt.subplots(1,n_ref_frames,figsize=(2*n_ref_frames,2), dpi=130)
     images = []
     for i in range(n_ref_frames):
@@ -795,7 +828,7 @@ if debug:
 print('--- Cropping & Subtracting the background level ---')
 bck_cropsizes = np.array((bck_cropsize, bck_cropsize))
 cal2_sci_cube_crop = resize(cal2_sci_cube_filt, bck_cropsizes, cent=crop_center)
-cal2_ref_cube_crop = resize(cal2_ref_cube_filt_list, bck_cropsizes, cent=crop_center)
+cal2_ref_cube_crop = resize(cal2_ref_cube_filt, bck_cropsizes, cent=crop_center)
 
 # Optimize the masks
 binary_coords = bck_cropsize/2 + np.array([-90, 20])
@@ -815,48 +848,55 @@ if display_all:
     # ax10.imshow(bck_mask_sci, vmin=0, vmax=1)
     
     fig11, ax11 = plt.subplots(1,1,figsize=(8,6), dpi=130)
-    ax11.imshow(bck_mask_ref*np.mean(cal2_ref_cube_crop,axis=0), norm=LogNorm(vmin=0.02, vmax=0.5))
-
+    ax11.imshow(bck_mask_ref*np.mean(cal2_ref_cube_crop,axis=(0,1)), norm=LogNorm(vmin=0.02, vmax=0.5))
+    
+    print('Number of NaNs in SCI: {}'.format(np.count_nonzero(np.isnan(cal2_sci_cube_crop[:, :, bck_mask_sci]))))
+    print('Number of NaNs in REF: {}'.format(np.count_nonzero(np.isnan(cal2_ref_cube_crop[:, :, bck_mask_sci]))))
+    
 # Estimate and subtract the background levels
-bck_level_sci = np.median(cal2_sci_cube_crop[:, :, bck_mask_sci])
-bck_level_ref = np.median(cal2_ref_cube_crop[:, bck_mask_ref])
+bck_level_sci = np.nanmedian(cal2_sci_cube_crop[:, :, bck_mask_sci])
+bck_level_ref = np.nanmedian(cal2_ref_cube_crop[:, :, bck_mask_ref])
 print('Background_level SCI = {:.2e} mJy.arcsec^-2'.format(bck_level_sci))
 print('Background_level REF = {:.2e} mJy.arcsec^-2'.format(bck_level_ref))
 
 cal2_sci_cube_bck_sub = cal2_sci_cube_crop - np.tile(bck_level_sci, (n_sci_files, n_sci_int, 1, 1))
-cal2_ref_cube_bck_sub = cal2_ref_cube_crop - np.tile(bck_level_ref, (n_ref_frames, 1, 1))
+cal2_ref_cube_bck_sub = cal2_ref_cube_crop - np.tile(bck_level_ref, (n_ref_files, n_ref_int, 1, 1))
 
-fig4, ax4 = plt.subplots(n_sci_files,n_sci_int,figsize=(2*n_sci_int,2*n_sci_files), dpi=130)
-fig4.suptitle('Background subtracted Integrations HD141569  '+filt)
-images = []
-for i in range(n_sci_files):
-    for j in range(n_sci_int):
-        # images.append(ax4[i,j].imshow(cal2_sci_cube_bck_sub[i,j,:,:], vmin=vmin_lin, vmax=vmax))
-        images.append(ax4[i,j].imshow(cal2_sci_cube_bck_sub[i,j,:,:], norm=LogNorm(vmin=vmax/100, vmax=vmax/3)))
-        ax4[i,j].set_title('ORIENT {}: {}deg'.format(i, PA_V3_sci[i]))
-plt.tight_layout()
-cbar = fig4.colorbar(images[0], ax=ax4)
-cbar.ax.set_title('mJy.arcsec$^{-2}$')
-plt.show()
-
-fig3, ax3 = plt.subplots(1,n_ref_frames,figsize=(2*n_ref_frames,2), dpi=130)
-fig3.suptitle('Background subtracted Integrations Ref Star  '+filt)
-images = []
-for i in range(n_ref_frames):
-   images.append(ax3[i].imshow(cal2_ref_cube_bck_sub[i,:,:], norm=LogNorm(vmin=vmax/100, vmax=vmax/3)))
-plt.tight_layout()
-cbar = fig3.colorbar(images[0], ax=ax3)
-cbar.ax.set_title('mJy.arcsec$^{-2}$')
-plt.show()
+display_grid_of_images_from_cube(cal2_sci_cube_bck_sub, vmax/3, #logNorm=False,
+                                 suptitle='Background subtracted Integrations HD141569  '+filt)
+display_grid_of_images_from_cube(cal2_ref_cube_bck_sub, vmax/3, #logNorm=False,
+                                 suptitle='Background subtracted Integrations Ref Star  '+filt)
 
 
+if export_tmp_filesQ:
+    path_tmp_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_Background_subtracted'
+    path_tmp_output = os.path.join(base_root, path_tmp_folder)
+    
+    for i, obs in enumerate(cal2_sci_cube_bck_sub):
+        cal2_filename = os.path.basename(cal2_sci_files[i])
+        filename_tmp_output = cal2_filename[:-5] + '_bckgrd-sub' + cal2_filename[-5:] 
+        hdu = fits.PrimaryHDU(data=None, header = fits.getheader(cal2_sci_files[i]))
+        hdu2 = fits.ImageHDU(obs,fits.getheader(cal2_sci_files[i], 1))
+        hdu2.header['BUNIT']= 'mJy/arcsec2'
+        hdul = fits.HDUList([hdu,hdu2])
+        hdul.writeto(os.path.join(path_tmp_output, filename_tmp_output), overwrite=overWriteQ)
+    
+    for i, obs in enumerate(cal2_ref_cube_bck_sub):
+        cal2_filename = os.path.basename(cal2_ref_files[i])
+        filename_tmp_output = cal2_filename[:-5] + '_bckgrd-sub' + cal2_filename[-5:] 
+        hdu = fits.PrimaryHDU(data=None, header = fits.getheader(cal2_ref_files[i]))
+        hdu2 = fits.ImageHDU(obs,fits.getheader(cal2_ref_files[i], 1))
+        hdu2.header['BUNIT']= 'mJy/arcsec2'
+        hdul = fits.HDUList([hdu,hdu2])
+        hdul.writeto(os.path.join(path_tmp_output, filename_tmp_output), overwrite=overWriteQ)
+    
 
 
 ### Classical subtraction of the SCI PSF
 if subtract_method == 'No-Subtraction':
     cal2_sci_cube_psf_sub = cal2_sci_cube_bck_sub
 elif subtract_method =='classical-Ref-Averaged':
-    ref_average = sci_ref_th_ratio * np.mean(cal2_ref_cube_bck_sub, axis=0)
+    ref_average = sci_ref_th_ratio * np.mean(cal2_ref_cube_bck_sub, axis=(0,1))
     cal2_sci_cube_psf_sub = cal2_sci_cube_bck_sub - np.tile(ref_average, (n_sci_files, n_sci_int, 1, 1))
 
 
