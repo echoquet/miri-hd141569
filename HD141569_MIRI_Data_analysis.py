@@ -412,6 +412,9 @@ data_type = '*_calints.fits'
 selected_data_files = np.array(glob(os.path.join(root, data_type)))
 targname_all_list = import_keyword_from_files(selected_data_files, 'TARGNAME', extension=0)
 filt_all_list = import_keyword_from_files(selected_data_files, 'FILTER', extension=0)
+nints_all_list = import_keyword_from_files(selected_data_files, 'NINTS', extension=0)
+ngroups_all_list = import_keyword_from_files(selected_data_files, 'NGROUPS', extension=0)
+
 print('Data type: {}'.format(data_type))
 print('Number of files: {}\n'.format(len(selected_data_files)))
 print('All Targets: {}'.format(np.unique(targname_all_list)))
@@ -421,52 +424,34 @@ print('All Filters: {}\n'.format(np.unique(filt_all_list)))
 filt = 'F1065C'
 targname_sci = 'HD 141569'
 targname_ref = 'HD 140986'
+targname_bck = ''
 
 print('SCI Target name: {}'.format(targname_sci))
 print('REF Target name: {}'.format(targname_ref))
+print('Background Field Target name: {}'.format(targname_ref))
 print('Filter: {}'.format(filt))
 
 selected_filt_indices = (filt_all_list == filt)
 selected_sci_indices = (targname_all_list == targname_sci)
 selected_ref_indices = (targname_all_list == targname_ref)
+selected_bck_indices = (targname_all_list == targname_bck)
 selected_sci_files = selected_data_files[selected_filt_indices * selected_sci_indices]
 selected_ref_files = selected_data_files[selected_filt_indices * selected_ref_indices]
 
+nints_selected_sci = np.unique(nints_all_list[selected_filt_indices * selected_sci_indices])[0]
+ngroups_selected_sci = np.unique(ngroups_all_list[selected_filt_indices * selected_sci_indices])[0]
+selected_exp_sci_indices = (nints_all_list == nints_selected_sci) * (ngroups_all_list == ngroups_selected_sci)
+selected_bck_sci_files = selected_data_files[selected_filt_indices * selected_bck_indices * selected_exp_sci_indices]
 
+nints_selected_ref = np.unique(nints_all_list[selected_filt_indices * selected_ref_indices])[0]
+ngroups_selected_ref = np.unique(ngroups_all_list[selected_filt_indices * selected_ref_indices])[0]
+selected_exp_ref_indices = (nints_all_list == nints_selected_ref) * (ngroups_all_list == ngroups_selected_ref)
+selected_bck_ref_files = selected_data_files[selected_filt_indices * selected_bck_indices * selected_exp_ref_indices]
 
-
-# Locate the datasets
-# print('Root folder:\n {}'.format(root))
-# print('SCI folder: {}'.format(folder_sci))
-# print('REF folder: {}'.format(folder_ref))
-# print('Filter name: {}'.format(filt))
-
-# Paths:
-# path_raw = os.path.join(root, 'MIRI_RAW_Data_Kim', filt)
-# path_cal1 = os.path.join(root, 'MIRI_CAL1', filt)
-# path_cal2 = os.path.join(root, 'MIRI_CAL2', filt)
-# path_cal2_sci = os.path.join(root, folder_sci)
-# path_cal2_ref = os.path.join(root, folder_ref)
-
-
-# basename_sci = 'HD141569_'+version+'*MIRIMAGE_'+filt+'exp1'
-# basename_ref = 'SGD*MIRIMAGE_'+filt+'exp1'
-# print('Basename SCI: {}'.format(basename_sci))
-# print('Basename REF: {}\n'.format(basename_ref))
-
-# raw_sci_files = glob(os.path.join(path_raw, basename_sci+'.fits'))
-# cal1_sci_files = glob(os.path.join(path_cal1, basename_sci+'_rateints.fits'))
-# cal2_sci_files = glob(os.path.join(path_cal2_sci, '*_calints.fits'))
-# print('Number of RAW SCI files: {}'.format(len(raw_sci_files)))
-# print('Number of CAL1 SCI files (rateints): {}'.format(len(cal1_sci_files)))
 print('Number of selected SCI files: {}'.format(len(selected_sci_files)))
-
-# raw_ref_files = glob(os.path.join(path_raw, basename_ref+'.fits'))
-# cal1_ref_files = glob(os.path.join(path_cal1, basename_ref+'_rateints.fits'))
-# cal2_ref_files = glob(os.path.join(path_cal2_ref, '*_calints.fits'))
-# print('Number of RAW REF files: {}'.format(len(raw_ref_files)))
-# print('Number of CAL1 REF files (rateints): {}'.format(len(cal1_ref_files)))
 print('Number of selected REF files: {}'.format(len(selected_ref_files)))
+print('Number of selected SCI Background files: {}'.format(len(selected_bck_sci_files)))
+print('Number of selected REF Background files: {}'.format(len(selected_bck_ref_files)))
 
 #%% RAW DATA INSPECTION
 if data_type == '*_uncal.fits':
@@ -616,29 +601,11 @@ print('##### CAL 2 DATA INSPECTION #####')
 if data_type == '*_calints.fits':
     cal2_sci_files = selected_sci_files
     cal2_ref_files = selected_ref_files
+    cal2_bck_sci_files = selected_bck_sci_files
+    cal2_bck_ref_files = selected_bck_ref_files
 
 #number of extensions: 
 #len(fits.open(cal2_sci_files[0]))
-# targname_sci_list = np.unique(import_keyword_from_files(cal2_sci_files, 'TARGNAME', extension=0))
-# filt_sci_list = import_keyword_from_files(cal2_sci_files, 'FILTER', extension=0)
-# targname_ref_list = np.unique(import_keyword_from_files(cal2_ref_files, 'TARGNAME', extension=0))
-# filt_ref_list = import_keyword_from_files(cal2_ref_files, 'FILTER', extension=0)
-
-# if len(targname_sci_list) > 1 or len(targname_ref_list) > 1:
-#     raise DatasetError('Mix of several targets')
-# else:
-#     targname_sci = targname_sci_list[0]
-#     targname_ref = targname_ref_list[0]
-
-# if len(np.unique(np.concatenate((filt_sci_list, filt_ref_list)))) > 1:
-#     raise DatasetError('Mix of several filters')
-# else:
-#     filt = filt_sci_list[0]
-
-# print('SCI TARGET NAME: {}'.format(targname_sci))
-# print('REFERENCE NAME: {}'.format(targname_ref))
-# print('FILTER: {}'.format(filt))
-# print('\n')
 
 
 if filt == 'F1065C':
@@ -674,18 +641,8 @@ print('Max value: ', max_val)
 # plt.imshow(cal2_sci_cube[0,0,:,:]*mask_cent, vmin=median_val, vmax=max_val)
 # plt.show()
 
-
-fig1, ax1 = plt.subplots(n_sci_files,n_sci_int,figsize=(2*n_sci_int,2*n_sci_files), dpi=130)
-fig1.suptitle('CAL 2 HD141569  '+filt)
-images = []
-for i in range(n_sci_files):
-    for j in range(n_sci_int):
-        images.append(ax1[i,j].imshow(cal2_sci_cube[i,j,:,:], vmin=vmin_lin, vmax=vmax))
-        ax1[i,j].set_title('ORIENT {}: {}deg'.format(i, PA_V3_sci[i]))
-plt.tight_layout()
-cbar = fig1.colorbar(images[0], ax=ax1)
-cbar.ax.set_title('mJy.arcsec$^{-2}$')
-plt.show()
+display_grid_of_images_from_cube(cal2_sci_cube, vmax, logNorm=False, 
+                                 suptitle='CAL 2 HD141569  '+filt)
 
 
 
@@ -701,24 +658,42 @@ n_ref_files = len(cal2_ref_cube)
 n_ref_int = (np.shape(cal2_ref_cube))[1]
 print('Number of exposures: {}'.format(n_ref_files))
 print('Number of integrations: {}'.format(n_ref_int))
-print('Number of rolls: {}'.format(len(np.unique(PA_V3_ref))))
+# print('Number of rolls: {}'.format(len(np.unique(PA_V3_ref))))
 
-int_index = 0
-ncol = 2
-nrow = int(np.ceil(len(cal2_ref_files)/2))
-fig3, ax3 = plt.subplots(nrow, ncol,figsize=(8,6), dpi=130)
-ax3[-1, -1].axis('off')
-fig3.suptitle('CAL 2 REFSTAR  '+filt)
-images = []
-for i in range(len(cal2_ref_files)):
-    irow = i%nrow
-    icol = i//nrow
-    images.append(ax3[irow, icol].imshow(cal2_ref_cube[i,int_index,:,:], vmin=vmin_lin, vmax=vmax))
-    ax3[irow, icol].set_title('ORIENT {}: {}deg'.format(i, PA_V3_ref[i]))
-plt.tight_layout(h_pad=0)
-cbar = fig3.colorbar(images[-1], ax=ax3)
-cbar.ax.set_title('mJy.arcsec$^{-2}$')
-plt.show()
+display_grid_of_images_from_cube(cal2_ref_cube, vmax, logNorm=False, 
+                                 suptitle='CAL 2 REFSTAR  '+filt)
+
+
+
+# BACKGROUND FIELD  DATASET COUNTRATES:
+print('##### BACKGROUND FIELD SCI : #####')
+phot_MJySr_bck_sci = import_keyword_from_files(cal2_bck_sci_files, 'PHOTMJSR', extension=1)
+phot_uJyA2_bck_sci = import_keyword_from_files(cal2_bck_sci_files, 'PHOTUJA2', extension=1)
+scaling_values_bck_sci = phot_uJyA2_bck_sci/(1000*phot_MJySr_bck_sci)
+cal2_bck_sci_cube = import_data_cube_from_files(cal2_bck_sci_files, scaling_list=scaling_values_bck_sci)
+n_bck_sci_files = len(cal2_bck_sci_cube)
+n_bck_sci_int = (np.shape(cal2_bck_sci_cube))[1]
+print('Number of exposures: {}'.format(n_bck_sci_files))
+print('Number of integrations: {}'.format(n_bck_sci_int))
+
+display_grid_of_images_from_cube(cal2_bck_sci_cube, vmax, logNorm=False, 
+                                 suptitle='CAL 2 BACKGROUND SCI  '+filt)
+
+
+print('##### BACKGROUND FIELD REF : #####')
+phot_MJySr_bck_ref = import_keyword_from_files(cal2_bck_ref_files, 'PHOTMJSR', extension=1)
+phot_uJyA2_bck_ref = import_keyword_from_files(cal2_bck_ref_files, 'PHOTUJA2', extension=1)
+scaling_values_bck_ref = phot_uJyA2_bck_ref/(1000*phot_MJySr_bck_ref)
+cal2_bck_ref_cube = import_data_cube_from_files(cal2_bck_ref_files, scaling_list=scaling_values_bck_ref)
+n_bck_ref_files = len(cal2_bck_ref_cube)
+n_bck_ref_int = (np.shape(cal2_bck_ref_cube))[1]
+print('Number of exposures: {}'.format(n_bck_ref_files))
+print('Number of integrations: {}'.format(n_bck_ref_int))
+
+display_grid_of_images_from_cube(cal2_bck_ref_cube, vmax, logNorm=False, 
+                                 suptitle='CAL 2 BACKGROUND REF  '+filt)
+
+
 
 
 #%% DATA COMPBINATION
@@ -747,7 +722,7 @@ else:
 
 
 ## Parameters for background subtraction: 
-bck_subtraction_method = 'uniform'   # 'uniform'  'bck_frames'
+bck_subtraction_method = 'bck_frames'   # 'uniform'  'bck_frames'
 bck_mask_size = 201
 bck_mask_Rin_sci = 50
 bck_mask_Rin_ref = 65
@@ -759,7 +734,7 @@ bck_saber_glow_angle = 5 #deg
 
 
 ## Parameters for the PSF subtraction
-subtract_method = 'classical-Ref-Averaged' # 'classical-Ref-Averaged'  'No-Subtraction'
+psf_subtraction_method = 'classical-Ref-Averaged' # 'classical-Ref-Averaged'  'No-Subtraction'
 if filt == 'F1065C':
     sci_ref_th_ratio = 64.42/1257.45  #64.02/469.45
 elif filt == 'F1140C':
@@ -804,7 +779,10 @@ cal2_sci_cube_clean = median_filter_cube(cal2_sci_cube, median_filt_box_size, me
 cal2_ref_cube_clean = median_filter_cube(cal2_ref_cube, median_filt_box_size, median_filt_thresh, 
                                         iter_max=median_filt_iter_max, verbose=verbose)
 
-
+cal2_bck_sci_cube_clean = median_filter_cube(cal2_bck_sci_cube, median_filt_box_size, median_filt_thresh, 
+                                        iter_max=median_filt_iter_max, verbose=verbose)
+cal2_bck_ref_cube_clean = median_filter_cube(cal2_bck_ref_cube, median_filt_box_size, median_filt_thresh, 
+                                        iter_max=median_filt_iter_max, verbose=verbose)
 
 #****** Frame Registration  ******
 # TODO: Register the SCI frames with companion
@@ -843,45 +821,50 @@ star_center_ref = fqpm_center
 
 #****** Background subtraction  ******
 print('--- Subtracting the background level ---')
-# Note: here we assume the background is spatially invariant.
-# If this is not the case, use the mean across the N integrations and M rolls.
-# If it is *verry* spatially variant, use an elliptical mask and mean across the N integration per roll.
 
-# bck_mask_sizes = np.array((bck_mask_size, bck_mask_size))
-# cal2_sci_cube_crop = resize(cal2_sci_cube_clean, bck_mask_sizes, cent=crop_center)
-# cal2_ref_cube_crop = resize(cal2_ref_cube_clean, bck_mask_sizes, cent=crop_center)
-
-# Optimize the masks
-companion_stars_coords = fqpm_center + np.array([-90, 20])
-bck_mask_sizes = np.array((bck_mask_size, bck_mask_size))
-bck_mask_box = ~create_box_mask(dims, np.round(star_center_sci).astype(int), bck_mask_sizes)
-bck_mask_sci = create_mask(bck_mask_Rin_sci, dims, cent=star_center_sci) * bck_mask_box
-bck_mask_sci *= create_mask(bck_mask_Rin_sci, dims, cent=companion_stars_coords)
-bck_mask_ref = create_mask(bck_mask_Rin_ref, dims, cent=star_center_ref) * bck_mask_box
-if bck_saber_glow_mask:
-    bck_saber_mask = create_saber_mask(dims, np.round(fqpm_center).astype(int), bck_saber_glow_width, bck_saber_glow_angle)
-    bck_mask_sci = bck_mask_sci * bck_saber_mask
-    bck_mask_ref = bck_mask_ref * bck_saber_mask
-
-if display_all:
-    fig10, ax10 = plt.subplots(1,1,figsize=(8,6), dpi=130)
-    ax10.imshow(bck_mask_sci*np.mean(cal2_sci_cube_clean,axis=(0,1)), norm=LogNorm(vmin=0.02, vmax=0.5))
-    # ax10.imshow(bck_mask_sci, vmin=0, vmax=1)
+if bck_subtraction_method == 'uniform':  
+    companion_stars_coords = fqpm_center + np.array([-90, 20])
+    bck_mask_sizes = np.array((bck_mask_size, bck_mask_size))
+    bck_mask_box = ~create_box_mask(dims, np.round(star_center_sci).astype(int), bck_mask_sizes)
+    bck_mask_sci = create_mask(bck_mask_Rin_sci, dims, cent=star_center_sci) * bck_mask_box
+    bck_mask_sci *= create_mask(bck_mask_Rin_sci, dims, cent=companion_stars_coords)
+    bck_mask_ref = create_mask(bck_mask_Rin_ref, dims, cent=star_center_ref) * bck_mask_box
+    if bck_saber_glow_mask:
+        bck_saber_mask = create_saber_mask(dims, np.round(fqpm_center).astype(int), bck_saber_glow_width, bck_saber_glow_angle)
+        bck_mask_sci = bck_mask_sci * bck_saber_mask
+        bck_mask_ref = bck_mask_ref * bck_saber_mask
     
-    fig11, ax11 = plt.subplots(1,1,figsize=(8,6), dpi=130)
-    ax11.imshow(bck_mask_ref*np.mean(cal2_ref_cube_clean,axis=(0,1)), norm=LogNorm(vmin=0.02, vmax=0.5))
+    if display_all:
+        fig10, ax10 = plt.subplots(1,1,figsize=(8,6), dpi=130)
+        ax10.imshow(bck_mask_sci*np.mean(cal2_sci_cube_clean,axis=(0,1)), norm=LogNorm(vmin=0.02, vmax=0.5))
+        # ax10.imshow(bck_mask_sci, vmin=0, vmax=1)
+        
+        fig11, ax11 = plt.subplots(1,1,figsize=(8,6), dpi=130)
+        ax11.imshow(bck_mask_ref*np.mean(cal2_ref_cube_clean,axis=(0,1)), norm=LogNorm(vmin=0.02, vmax=0.5))
+        
+        print('Number of NaNs in SCI: {}'.format(np.count_nonzero(np.isnan(cal2_sci_cube_clean[:, :, bck_mask_sci]))))
+        print('Number of NaNs in REF: {}'.format(np.count_nonzero(np.isnan(cal2_ref_cube_clean[:, :, bck_mask_sci]))))
+        
+    # Estimate and subtract the background levels
+    bck_level_sci = np.nanmedian(cal2_sci_cube_clean[:, :, bck_mask_sci])
+    bck_level_ref = np.nanmedian(cal2_ref_cube_clean[:, :, bck_mask_ref])
     
-    print('Number of NaNs in SCI: {}'.format(np.count_nonzero(np.isnan(cal2_sci_cube_clean[:, :, bck_mask_sci]))))
-    print('Number of NaNs in REF: {}'.format(np.count_nonzero(np.isnan(cal2_ref_cube_clean[:, :, bck_mask_sci]))))
-    
-# Estimate and subtract the background levels
-bck_level_sci = np.nanmedian(cal2_sci_cube_clean[:, :, bck_mask_sci])
-bck_level_ref = np.nanmedian(cal2_ref_cube_clean[:, :, bck_mask_ref])
-print('Background_level SCI = {:.2e} mJy.arcsec^-2'.format(bck_level_sci))
-print('Background_level REF = {:.2e} mJy.arcsec^-2'.format(bck_level_ref))
+    bck_tile_sci = np.tile(bck_level_sci, (n_sci_files, n_sci_int, dims[0], dims[1]))
+    bck_tile_ref = np.tile(bck_level_ref, (n_ref_files, n_ref_int, dims[0], dims[1]))
 
-cal2_sci_cube_bck_sub = cal2_sci_cube_clean - np.tile(bck_level_sci, (n_sci_files, n_sci_int, 1, 1))
-cal2_ref_cube_bck_sub = cal2_ref_cube_clean - np.tile(bck_level_ref, (n_ref_files, n_ref_int, 1, 1))
+elif bck_subtraction_method == 'bck_frames':
+    bck_level_sci = np.median(cal2_bck_sci_cube_clean, axis=(0,1))
+    bck_level_ref = np.median(cal2_bck_ref_cube_clean, axis=(0,1))
+    
+    bck_tile_sci = np.tile(bck_level_sci, (n_sci_files, n_sci_int, 1, 1))
+    bck_tile_ref = np.tile(bck_level_ref, (n_ref_files, n_ref_int, 1, 1))
+
+
+print('Background_level SCI = {:.2e} mJy.arcsec^-2'.format(np.nanmean(bck_tile_sci)))
+print('Background_level REF = {:.2e} mJy.arcsec^-2'.format(np.nanmean(bck_tile_ref)))
+
+cal2_sci_cube_bck_sub = cal2_sci_cube_clean - bck_tile_sci
+cal2_ref_cube_bck_sub = cal2_ref_cube_clean - bck_tile_ref
 
 display_grid_of_images_from_cube(cal2_sci_cube_bck_sub, vmax/3, #logNorm=False,
                                  suptitle='Background subtracted Integrations HD141569  '+filt)
@@ -914,9 +897,9 @@ if export_tmp_filesQ:
 
 
 ### Classical subtraction of the SCI PSF
-if subtract_method == 'No-Subtraction':
+if psf_subtraction_method == 'No-Subtraction':
     cal2_sci_cube_psf_sub = cal2_sci_cube_bck_sub
-elif subtract_method =='classical-Ref-Averaged':
+elif psf_subtraction_method =='classical-Ref-Averaged':
     ref_average = sci_ref_th_ratio * np.mean(cal2_ref_cube_bck_sub, axis=(0,1))
     cal2_sci_cube_psf_sub = cal2_sci_cube_bck_sub - np.tile(ref_average, (n_sci_files, n_sci_int, 1, 1))
 
@@ -969,7 +952,7 @@ print('Total flux in image: {:.3f} mJy'.format(np.nansum(combined_image)*0.11*0.
 # vmin = 0.1 #median_val*0.8
 # vmax = 10 #3 #max_val*0.7
 fig7, ax7 = plt.subplots(1,1,figsize=(8,6), dpi=130)
-im = ax7.imshow(combined_image, norm=LogNorm(vmin=vmax/100, vmax=vmax))
+im = ax7.imshow(combined_image, norm=LogNorm(vmin=vmax/1000, vmax=vmax))
 # im = ax7.imshow(combined_image, vmin=vmin_lin, vmax=vmax)
 ax7.set_title('COMBINED HD141569  '+filt)
 plt.tight_layout()
