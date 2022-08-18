@@ -703,7 +703,6 @@ plt.show()
 debug = False
 display_all = True
 verbose = False
-commissioning_dataQ = False
 
 # Values from Aarynn C. / Dean H. after commissioning
 if filt == 'F1065C':
@@ -741,8 +740,6 @@ elif filt == 'F1140C':
 else:
     sci_ref_th_ratio = 30.65/595.52   #30.71/223.75
 
-if commissioning_dataQ:
-    sci_ref_th_ratio = 10**((4.531-4.655)/2.5) # from W3 mag
 
 # Parameters for 4QPM mask and data combination
 # TODO: use CDBS calibration mask instead!
