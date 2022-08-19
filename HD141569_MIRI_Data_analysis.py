@@ -399,9 +399,11 @@ print('##### IDENTIFY DATA FILES ### ')
 # root = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/2_Raw_Synthetic_Data'
 # root = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/4_Real_JWST_Data/MIRI_Commissioning/jw01037'
 base_root = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets'
-root_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_CAL2'
+
+cal2_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_CAL2'
+path_cal2_data = os.path.join(base_root, cal2_folder)
+
 save_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_PROCESSED'
-root = os.path.join(base_root, root_folder)
 path_output = os.path.join(base_root, save_folder)
 
 
@@ -409,7 +411,7 @@ path_output = os.path.join(base_root, save_folder)
 inspec_cal1 = False
 data_type = '*_calints.fits'
 
-selected_data_files = np.array(glob(os.path.join(root, data_type)))
+selected_data_files = np.array(glob(os.path.join(path_cal2_data, data_type)))
 targname_all_list = import_keyword_from_files(selected_data_files, 'TARGNAME', extension=0)
 filt_all_list = import_keyword_from_files(selected_data_files, 'FILTER', extension=0)
 nints_all_list = import_keyword_from_files(selected_data_files, 'NINTS', extension=0)
@@ -421,7 +423,7 @@ print('All Targets: {}'.format(np.unique(targname_all_list)))
 print('All Filters: {}\n'.format(np.unique(filt_all_list)))
 
 
-filt = 'F1065C'
+filt = 'F1550C'
 targname_sci = 'HD 141569'
 targname_ref = 'HD 140986'
 targname_bck = ''
@@ -452,6 +454,44 @@ print('Number of selected SCI files: {}'.format(len(selected_sci_files)))
 print('Number of selected REF files: {}'.format(len(selected_ref_files)))
 print('Number of selected SCI Background files: {}'.format(len(selected_bck_sci_files)))
 print('Number of selected REF Background files: {}'.format(len(selected_bck_ref_files)))
+
+
+#%% TARGET ACQ FILES
+
+
+target_acq_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_TA_CAL'
+path_target_acq_data = os.path.join(base_root, target_acq_folder)
+
+all_TA_files = np.array(glob(os.path.join(path_target_acq_data, '*_cal.fits')))
+targname_all_TA_list = import_keyword_from_files(all_TA_files, 'TARGNAME', extension=0)
+filt_all_TA_list = import_keyword_from_files(all_TA_files, 'FILTER', extension=0)
+
+selected_TA_sci_indices = (targname_all_TA_list == targname_sci)
+selected_TA_ref_indices = (targname_all_TA_list == targname_ref)
+selected_TA_sci_files = all_TA_files[selected_TA_sci_indices]
+selected_TA_ref_files = all_TA_files[selected_TA_ref_indices]
+
+print('Number of selected SCI files: {}'.format(len(selected_TA_sci_files)))
+print('Number of selected REF files: {}'.format(len(selected_TA_ref_files)))
+
+
+# PA_V3_sci = import_keyword_from_files(cal2_sci_files, 'PA_V3', extension=1)
+phot_MJySr_TA_sci = import_keyword_from_files(selected_TA_sci_files, 'PHOTMJSR', extension=1)
+phot_uJyA2_TA_sci = import_keyword_from_files(selected_TA_sci_files, 'PHOTUJA2', extension=1)
+scaling_values_TA_sci = phot_uJyA2_TA_sci/(1000*phot_MJySr_TA_sci)
+target_acq_sci_cube = import_data_cube_from_files(selected_TA_sci_files, scaling_list=scaling_values_TA_sci)
+dims = (np.shape(cal2_sci_cube))[-2:]
+n_sci_files = len(cal2_sci_files)
+n_sci_int = (np.shape(cal2_sci_cube))[1]
+print('Number of exposures: {}'.format(n_sci_files))
+print('Number of integrations: {}'.format(n_sci_int))
+print('Number of rolls: {}'.format(len(np.unique(PA_V3_sci))))
+print('Image dimensions: {}'.format(dims))
+
+display_grid_of_images_from_cube(cal2_sci_cube, vmax, logNorm=False, 
+                                 suptitle='CAL 2 HD141569  '+filt)
+
+
 
 #%% RAW DATA INSPECTION
 if data_type == '*_uncal.fits':
@@ -632,15 +672,6 @@ print('Number of integrations: {}'.format(n_sci_int))
 print('Number of rolls: {}'.format(len(np.unique(PA_V3_sci))))
 print('Image dimensions: {}'.format(dims))
 
-mask_cent = ~create_mask(15, dims, cent=[110,120])
-max_val = np.max(cal2_sci_cube[0,0,:,:]*mask_cent)
-median_val = np.median(cal2_sci_cube[0,0,:,:])
-print('Median value: ', median_val)
-print('Max value: ', max_val)
-# fig0, ax0 = plt.subplots(1,1,figsize=(6,6), dpi=130)
-# plt.imshow(cal2_sci_cube[0,0,:,:]*mask_cent, vmin=median_val, vmax=max_val)
-# plt.show()
-
 display_grid_of_images_from_cube(cal2_sci_cube, vmax, logNorm=False, 
                                  suptitle='CAL 2 HD141569  '+filt)
 
@@ -711,18 +742,20 @@ median_filt_iter_max = 20
 
 
 ## 4QPM mask centers:
-# Values from Aarynn C. / Dean H. after commissioning. 
-# Will eventually be in the header as CRPIX1 and CRPIX2 or in CRDS
+# Will eventually be in the SIAF
 if filt == 'F1065C':
-    fqpm_center = np.array([111.89, 120.81])
+    fqpm_center = np.array([113.115523, 121.1844268]) - 1 #Values from J. Aguilar from commissioning. 1-indexed.
+    # fqpm_center = np.array([111.89, 120.81]) #Values from Aarynn C. / Dean H. after commissioning.
 elif filt == 'F1140C':
-    fqpm_center = np.array([112.20, 119.99])
-else:
-    fqpm_center = np.array([113.33, 119.84])
+    fqpm_center = np.array([113.2361251, 120.7486661]) - 1  #Values from J. Aguilar from commissioning. 1-indexed.
+    # fqpm_center = np.array([112.20, 119.99]) #Values from Aarynn C. / Dean H. after commissioning.
+elif filt == 'F1550C':
+    fqpm_center = np.array([114.2883897, 120.745885]) - 1   #Values from J. Aguilar from commissioning. 1-indexed.
+    # fqpm_center = np.array([113.33, 119.84]) #Values from Aarynn C. / Dean H. after commissioning.
 
 
 ## Parameters for background subtraction: 
-bck_subtraction_method = 'bck_frames'   # 'uniform'  'bck_frames'
+bck_subtraction_method = 'bck_frames'   # 'uniform'  'bck_frames'  'bck_frames_combo_from_Max'
 bck_mask_size = 201
 bck_mask_Rin_sci = 50
 bck_mask_Rin_ref = 65
@@ -825,10 +858,10 @@ print('--- Subtracting the background level ---')
 if bck_subtraction_method == 'uniform':  
     companion_stars_coords = fqpm_center + np.array([-90, 20])
     bck_mask_sizes = np.array((bck_mask_size, bck_mask_size))
-    bck_mask_box = ~create_box_mask(dims, np.round(star_center_sci).astype(int), bck_mask_sizes)
-    bck_mask_sci = create_mask(bck_mask_Rin_sci, dims, cent=star_center_sci) * bck_mask_box
+    bck_mask_box = ~create_box_mask(dims, np.round(fqpm_center).astype(int), bck_mask_sizes)
+    bck_mask_sci = create_mask(bck_mask_Rin_sci, dims, cent=fqpm_center) * bck_mask_box
     bck_mask_sci *= create_mask(bck_mask_Rin_sci, dims, cent=companion_stars_coords)
-    bck_mask_ref = create_mask(bck_mask_Rin_ref, dims, cent=star_center_ref) * bck_mask_box
+    bck_mask_ref = create_mask(bck_mask_Rin_ref, dims, cent=fqpm_center) * bck_mask_box
     if bck_saber_glow_mask:
         bck_saber_mask = create_saber_mask(dims, np.round(fqpm_center).astype(int), bck_saber_glow_width, bck_saber_glow_angle)
         bck_mask_sci = bck_mask_sci * bck_saber_mask
