@@ -13,6 +13,7 @@ import scipy.ndimage as ndimage
 from scipy.optimize import minimize
 from copy import deepcopy
 from astropy.io import fits
+from photutils.centroids import centroid_sources, centroid_com, centroid_quadratic,centroid_2dg, centroid_1dg
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 plt.rcParams['image.origin'] = 'lower'
@@ -352,7 +353,8 @@ def median_filter_cube(cube, box_half_size, threshold, iter_max=10000, verbose=T
     return cube_filtered
 
 
-def display_grid_of_images_from_cube(cube, vmax, suptitle='', imtitle_array=None, logNorm=True, vmin=None, dpi=130, imsize=2):
+def display_grid_of_images_from_cube(cube, vmax, suptitle='', imtitle_array=None, logNorm=True, 
+                                     vmin=None, dpi=130, imsize=3, colorbar = False):
     dims = np.shape(cube)
     ndims = len(dims)
     if ndims == 4:
@@ -388,23 +390,291 @@ def display_grid_of_images_from_cube(cube, vmax, suptitle='', imtitle_array=None
                 ax[i].set_title(imtitle_array[i])
                 
     plt.tight_layout()
-    cbar = fig.colorbar(images[0], ax=ax)
-    cbar.ax.set_title('mJy.arcsec$^{-2}$')
+    if colorbar:
+        cbar = fig.colorbar(images[0], ax=ax)
+        cbar.ax.set_title('mJy.arcsec$^{-2}$')
     plt.show()
 
+
+def info(array, label='', show_mean=True, show_med=False, show_min=False, show_max=False):
+    print(label)
+    if show_mean: print('    Mean    : {}'.format(np.mean(array))) 
+    if show_med: print('    Median  : {}'.format(np.median(array))) 
+    if show_min: print('    Min     : {}'.format(np.min(array)))
+    if show_max: print('    Max     : {}'.format(np.max(array)))
+    print('    Std dev : {}'.format(np.std(array)))
+    print('    Max-Min : {}'.format(np.max(array) - np.min(array)))
+
+pixsize = 0.11
+
+#%% GLOBAL CONSTANTS
+
+pixsize = 0.11
+base_root = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets'
+
+
+targname_sci = 'HD 141569'
+targname_ref = 'HD 140986'
+targname_bck = ''
+filt = 'F1065C'
+
+#%% TARGET ACQ FILES
+print('\n##### PROCESSING THE TARGET ACQUISITION FILES ### ')
+##### CUSTOM Parameters:
+
+target_acq_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_TA_CAL'
+path_target_acq_data = os.path.join(base_root, target_acq_folder)
+
+## Parameter for Displaying the images:
+vmax_ta= 10
+
+# Parameters for frame selection:
+discard_ta_filename = np.array(['jw01386020001_02101_00001_mirimage_cal.fits',
+                                'jw01386023001_02101_00001_mirimage_cal.fits'])
+
+## Parameters for background subtraction:
+rIn_mask_A = 17
+rIn_mask_BC = 3
+
+## Parameters for centroiding 
+rough_ta_xpos_ABC = np.array([[179, 196.,197.5],[135.5, 152, 154], 
+                          [136, 163, 166],
+                          [177,194, 195], [137,155,159],
+                          [138, 165, 169 ],
+                          [177, 194, 196], [133,151,152],
+                          [177,205,209], [134,162,165]
+                          ]) - 1
+rough_ta_ypos_ABC = np.array([[168, 101., 89.2],[125, 58, 47], 
+                          [126, 62, 50],
+                          [169,103, 91], [128, 61, 50],
+                          [128, 65, 54 ],
+                          [164, 98, 87],[125,59,48],
+                          [164,102, 91], [126,63,52]
+                          ]) - 1
+centroid_box_size_ta = 9
+centroid_method_ta = centroid_2dg #centroid_sources, centroid_com, centroid_quadratic,centroid_2dg, centroid_1dg
+
+## Parameters for saving the data
+export_combined_ta = True
+overWriteTAQ = True
+combined_ta_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_TA_combined'
+
+
+#############################################################################################
+##### Find the TA frames ####
+all_TA_files = np.array(glob(os.path.join(path_target_acq_data, '*_cal.fits')))
+all_TA_files.sort()
+all_TA_PA_V3 = import_keyword_from_files(all_TA_files, 'PA_V3', extension=1)
+targname_all_TA_list = import_keyword_from_files(all_TA_files, 'TARGNAME', extension=0)
+filt_all_TA_list = import_keyword_from_files(all_TA_files, 'FILTER', extension=0)
+
+# Note: there is only one Filter for the TA. 
+# Use the filename or Obs ID to select files by coronagraphic filter
+selected_TA_sci_indices = (targname_all_TA_list == targname_sci)
+selected_TA_ref_indices = (targname_all_TA_list == targname_ref)
+selected_TA_sci_files = all_TA_files[selected_TA_sci_indices]
+selected_TA_ref_files = all_TA_files[selected_TA_ref_indices]
+selected_TA_sci_PA_V3 = all_TA_PA_V3[selected_TA_sci_indices]
+
+print('Number of selected SCI-TA files: {}'.format(len(selected_TA_sci_files)))
+print('Number of selected REF-TA files: {}'.format(len(selected_TA_ref_files)))
+print('Filter Name: {}'.format(np.unique(filt_all_TA_list)))
+
+# Note: the TA cal doesn't seem to be flux calibrated. 
+# The files are in DN/s and there is no photometric keyword.
+selected_TA_sci_filenames = np.array([os.path.basename(file) for file in selected_TA_sci_files])
+target_acq_sci_cube = import_data_cube_from_files(selected_TA_sci_files)
+n_sci_ta = len(target_acq_sci_cube)
+dims_ta = np.shape(target_acq_sci_cube)[1:]
+
+
+display_grid_of_images_from_cube(target_acq_sci_cube, vmax_ta, vmin=-vmax_ta/2, logNorm=False, 
+                                  suptitle='Target Acq HD 141569')
+
+
+
+##### Discarding frames with sources on the 4QPM edges:
+print('\nDiscarding {} SCI-TA files: \n{}'.format(len(discard_ta_filename), discard_ta_filename))
+discard_ta_flag = np.isin(selected_TA_sci_filenames, discard_ta_filename)
+n_sci_ta_cent = n_sci_ta - len(discard_ta_filename)
+target_acq_sci_cube_selec = target_acq_sci_cube[~discard_ta_flag]
+selected_TA_sci_PA_V3_cent = selected_TA_sci_PA_V3[~discard_ta_flag]
+
+
+#### Estimate the background frame from the median image:
+print('\nBAckground subtraction')
+target_acq_sci_cube_masked = deepcopy(target_acq_sci_cube_selec)
+for i in range(n_sci_ta_cent):
+    mask_ta_sci_stars = np.ones(dims_ta, dtype=bool) 
+    mask_ta_sci_stars *= create_mask(rIn_mask_A, dims_ta, cent=[rough_ta_ypos_ABC[i,0], rough_ta_xpos_ABC[i,0]])
+    mask_ta_sci_stars *= create_mask(rIn_mask_BC, dims_ta, cent=[rough_ta_ypos_ABC[i,1], rough_ta_xpos_ABC[i,1]])
+    mask_ta_sci_stars *= create_mask(rIn_mask_BC, dims_ta, cent=[rough_ta_ypos_ABC[i,2], rough_ta_xpos_ABC[i,2]])
+    target_acq_sci_cube_masked[i, ~mask_ta_sci_stars] = np.nan
+
+target_acq_sci_median_bckg = np.nanmedian(target_acq_sci_cube_masked, axis=0)
+
+target_acq_sci_cube_clean = target_acq_sci_cube_selec - np.tile(target_acq_sci_median_bckg,  (n_sci_ta_cent, 1, 1))
+
+fig7, ax7 = plt.subplots(1,1,figsize=(8,6), dpi=130)
+im = ax7.imshow(target_acq_sci_median_bckg, vmin=-vmax_ta/2, vmax=vmax_ta)
+plt.tight_layout()
+cbar = fig7.colorbar(im, ax=ax7)
+cbar.ax.set_title('DN/s$')
+plt.show()
+
+
+##### Finding the centroid of the three stars
+print('\nFinding the centroid of the three stars:')
+fine_ta_xpos_ABC = np.empty((n_sci_ta_cent, 3))
+fine_ta_ypos_ABC = np.empty((n_sci_ta_cent, 3))
+for i, image_ta in enumerate(target_acq_sci_cube_clean):
+    x, y = centroid_sources(image_ta, 
+                            rough_ta_xpos_ABC[i], rough_ta_ypos_ABC[i], 
+                            box_size=centroid_box_size_ta, centroid_func=centroid_method_ta)
+    fine_ta_xpos_ABC[i,:] = x
+    fine_ta_ypos_ABC[i,:] = y
+
+
+vmax_ta_list = [400,25,25]
+zoom_size = 15
+fig2, ax2 = plt.subplots(3, n_sci_ta_cent, figsize=(4*n_sci_ta_cent, 4*3), dpi=130)
+for i in range(n_sci_ta_cent):
+    for k in range(3):
+        ax2[k,i].imshow(target_acq_sci_cube_clean[i,:,:], interpolation='nearest', 
+                        vmax=vmax_ta_list[k], vmin=-vmax_ta_list[k]/2)
+        ax2[k,i].scatter(fine_ta_xpos_ABC[i,k], fine_ta_ypos_ABC[i,k], marker='x', color='blue',s=100)    
+        ax2[k,i].set_xlim(fine_ta_xpos_ABC[i,k]+ np.array([-1, 1])*zoom_size)
+        ax2[k,i].set_ylim(fine_ta_ypos_ABC[i,k]+ np.array([-1, 1])*zoom_size)
+plt.tight_layout()
+plt.show()
+
+labelStars_ta = ['A star','B star', 'C star']
+fig1, ax1 = plt.subplots(1,3,figsize=(4*3, 4), dpi=130)
+for i in range(3):
+    ax1[i].scatter(fine_ta_xpos_ABC[:,i], fine_ta_ypos_ABC[:,i], marker='x') 
+    ax1[i].set_title('{} '.format(labelStars_ta[i]))
+    ax1[i].set_xlim(fine_ta_xpos_ABC[:,i].mean()+ np.array([-1, 1])*100)
+    ax1[i].set_ylim(fine_ta_ypos_ABC[:,i].mean()+ np.array([-1, 1])*100)
+    ax1[i].set_xlabel('X position (pix)')
+    ax1[i].set_ylabel('Y position (pix)')
+plt.tight_layout()
+plt.show()
+
+
+fine_ta_xpos_ABC_from_B = fine_ta_xpos_ABC - np.tile(np.reshape(fine_ta_xpos_ABC[:,1],(len(fine_ta_xpos_ABC),1)),(1,3))
+fine_ta_ypos_ABC_from_B = fine_ta_ypos_ABC - np.tile(np.reshape(fine_ta_ypos_ABC[:,1],(len(fine_ta_ypos_ABC),1)),(1,3))
+xy_coords_A_from_B = np.array([fine_ta_xpos_ABC_from_B[:,0], fine_ta_ypos_ABC_from_B[:,0]])
+xy_coords_C_from_B = np.array([fine_ta_xpos_ABC_from_B[:,2], fine_ta_ypos_ABC_from_B[:,2]])
+
+# Get the Separation and PA of A&C from B, corrected from the telescope orient
+sep_A_from_B = np.sqrt(np.sum(xy_coords_A_from_B**2, axis=0)) * pixsize
+pa_A_from_B = np.arctan2(-xy_coords_A_from_B[0], xy_coords_A_from_B[1])*180/np.pi + selected_TA_sci_PA_V3_cent
+sep_C_from_B = np.sqrt(np.sum(xy_coords_C_from_B**2, axis=0)) * pixsize
+pa_C_from_B = np.arctan2(-xy_coords_C_from_B[0], xy_coords_C_from_B[1])*180/np.pi + selected_TA_sci_PA_V3_cent
+
+# Convert these to dRA and dDEC
+# From Gaia, A should be dRA = 5.67   dDec = 5.02
+# From Gaia, C should be dRA = 1.11   dDec = 0.71
+ra_A_from_B = sep_A_from_B *np.sin(pa_A_from_B*np.pi/180)
+dec_A_from_B = sep_A_from_B *np.cos(pa_A_from_B*np.pi/180)
+ra_C_from_B = sep_C_from_B *np.sin(pa_C_from_B*np.pi/180)
+dec_C_from_B = sep_C_from_B *np.cos(pa_C_from_B*np.pi/180)
+
+# Define the best (median) offset and uncertainty (std-dev)
+best_sep_A_from_B = np.array([np.median(sep_A_from_B), np.std(sep_A_from_B)])
+best_pa_A_from_B = np.array([np.median(pa_A_from_B), np.std(pa_A_from_B)])
+best_sep_C_from_B = np.array([np.median(sep_C_from_B), np.std(sep_C_from_B)])
+best_pa_C_from_B = np.array([np.median(pa_C_from_B), np.std(pa_C_from_B)])
+
+best_ra_A_from_B = np.array([np.median(ra_A_from_B), np.std(ra_A_from_B)])
+best_dec_A_from_B = np.array([np.median(dec_A_from_B), np.std(dec_A_from_B)])
+best_ra_C_from_B = np.array([np.median(ra_C_from_B), np.std(ra_C_from_B)])
+best_dec_C_from_B = np.array([np.median(dec_C_from_B), np.std(dec_C_from_B)])
+
+print('Best coordinates of A from B:')
+print('    Sep = {:.2f}" ± {:.2f}"'.format(best_sep_A_from_B[0], best_sep_A_from_B[1]))
+print('    PA = {:.2f}º ± {:.2f}º'.format(best_pa_A_from_B[0], best_pa_A_from_B[1]))
+print('    dRA = {:.2f}" ± {:.2f}"'.format(best_ra_A_from_B[0], best_ra_A_from_B[1]))
+print('    dDEC = {:.2f}" ± {:.2f}"'.format(best_dec_A_from_B[0], best_dec_A_from_B[1]))
+
+print('Best coordinates of C from B:')
+print('    Sep = {:.2f}" ± {:.2f}"'.format(best_sep_C_from_B[0], best_sep_C_from_B[1]))
+print('    PA = {:.2f}º ± {:.2f}º'.format(best_pa_C_from_B[0], best_pa_C_from_B[1]))
+print('    dRA = {:.2f}" ± {:.2f}"'.format(best_ra_C_from_B[0], best_ra_C_from_B[1]))
+print('    dDEC = {:.2f}" ± {:.2f}"'.format(best_dec_C_from_B[0], best_dec_C_from_B[1]))
+
+
+fig1, ax1 = plt.subplots(1,2,figsize=(4*2, 4), dpi=130)
+ax1[0].scatter(ra_A_from_B, dec_A_from_B, marker='x') 
+ax1[1].scatter(ra_C_from_B, dec_C_from_B, marker='x') 
+ax1[0].scatter(best_ra_A_from_B, best_dec_A_from_B, marker='x', color='red') 
+ax1[1].scatter(best_ra_C_from_B, best_dec_C_from_B, marker='x', color='red') 
+ax1[0].set_title('A star from B')
+ax1[1].set_title('C star from B')
+ax1[0].set_xlim(ra_A_from_B.mean()+ np.array([-1, 1])*pixsize)
+ax1[0].set_ylim(dec_A_from_B.mean()+ np.array([-1, 1])*pixsize)
+ax1[1].set_xlim(ra_C_from_B.mean()+ np.array([-1, 1])*pixsize)
+ax1[1].set_ylim(dec_C_from_B.mean()+ np.array([-1, 1])*pixsize)
+for i in range(2):
+    ax1[i].set_xlabel('dRA from B (arcsec)')
+    ax1[i].set_ylabel('dDEC from B (arcsec)')
+plt.tight_layout()
+plt.show()
+
+
+#TODO: cross corelate also the reference TA frames, combine them, and send to Karl
+
+
+###### Registering the images using the B coordinates:
+print('\nRegister, derotate, and combine the SCI TA frames:')
+index_B = 0
+center_ta_images = (np.array(target_acq_sci_cube_clean.shape[1:])-1)//2
+target_acq_sci_cube_centered_derotated = np.empty(np.shape(target_acq_sci_cube_clean))
+for i, ta_image in enumerate (target_acq_sci_cube_clean):
+    shfit_values = np.array([fine_ta_xpos_ABC[i,index_B] - center_ta_images[1], fine_ta_ypos_ABC[i,index_B] - center_ta_images[0]])
+    ta_image_centered = shift_interp(ta_image, -shfit_values)
+    ta_image_derotated = frame_rotate_interp(ta_image_centered, -selected_TA_sci_PA_V3_cent[i], center=center_ta_images)
+    target_acq_sci_cube_centered_derotated[i] = ta_image_derotated
+
+# display_grid_of_images_from_cube(target_acq_sci_cube_centered_derotated, vmax_ta, logNorm=False, 
+#                                   suptitle='Target Acq HD 141569')
+
+target_acq_sci_cube_combined = np.median(target_acq_sci_cube_centered_derotated, axis=0)
+
+fig7, ax7 = plt.subplots(1,1,figsize=(8,6), dpi=130)
+# im = ax7.imshow(target_acq_sci_cube_combined, norm=LogNorm(vmin=vmax_ta/1000, vmax=vmax_ta*5))
+im = ax7.imshow(target_acq_sci_cube_combined, vmin=-vmax_ta*5/2, vmax=vmax_ta*5)
+ax7.set_title('COMBINED HD141569 TA frames')
+plt.tight_layout()
+cbar = fig7.colorbar(im, ax=ax7)
+cbar.ax.set_title('DN/s$')
+plt.show()
+
+
+
+##### Export the combined TA frames
+if export_combined_ta:    
+    print('\n--- Exporting the combined TA image ---')
+    hdu = fits.PrimaryHDU(data=None, header = fits.getheader(selected_TA_sci_files[0]))
+    hdu2 = fits.ImageHDU(target_acq_sci_cube_combined,fits.getheader(selected_TA_sci_files[0], 1))
+    hdul = fits.HDUList([hdu, hdu2])
+    
+    path_combined_ta = os.path.join(base_root, combined_ta_folder)
+    combined_ta_filename = 'HD141569_FND_TA_combined.fits'
+    hdul.writeto(os.path.join(path_combined_ta, combined_ta_filename), overwrite=overWriteTAQ)
+    
+
+
+
 #%%
-print('##### IDENTIFY DATA FILES ### ')
+print('##### IDENTIFY CORONAGRAPHIC DATA FILES ### ')
 
 # Parameters to locate / select the datasets:
 # root = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/2_Raw_Synthetic_Data'
 # root = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/4_Real_JWST_Data/MIRI_Commissioning/jw01037'
-base_root = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets'
 
 cal2_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_CAL2'
 path_cal2_data = os.path.join(base_root, cal2_folder)
-
-save_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_PROCESSED'
-path_output = os.path.join(base_root, save_folder)
 
 
 # inspec_raw = True
@@ -412,6 +682,7 @@ inspec_cal1 = False
 data_type = '*_calints.fits'
 
 selected_data_files = np.array(glob(os.path.join(path_cal2_data, data_type)))
+selected_data_files.sort()
 targname_all_list = import_keyword_from_files(selected_data_files, 'TARGNAME', extension=0)
 filt_all_list = import_keyword_from_files(selected_data_files, 'FILTER', extension=0)
 nints_all_list = import_keyword_from_files(selected_data_files, 'NINTS', extension=0)
@@ -423,14 +694,9 @@ print('All Targets: {}'.format(np.unique(targname_all_list)))
 print('All Filters: {}\n'.format(np.unique(filt_all_list)))
 
 
-filt = 'F1550C'
-targname_sci = 'HD 141569'
-targname_ref = 'HD 140986'
-targname_bck = ''
-
 print('SCI Target name: {}'.format(targname_sci))
 print('REF Target name: {}'.format(targname_ref))
-print('Background Field Target name: {}'.format(targname_ref))
+print('Background Field Target name: {}'.format(targname_bck))
 print('Filter: {}'.format(filt))
 
 selected_filt_indices = (filt_all_list == filt)
@@ -456,40 +722,6 @@ print('Number of selected SCI Background files: {}'.format(len(selected_bck_sci_
 print('Number of selected REF Background files: {}'.format(len(selected_bck_ref_files)))
 
 
-#%% TARGET ACQ FILES
-
-
-target_acq_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_TA_CAL'
-path_target_acq_data = os.path.join(base_root, target_acq_folder)
-
-all_TA_files = np.array(glob(os.path.join(path_target_acq_data, '*_cal.fits')))
-targname_all_TA_list = import_keyword_from_files(all_TA_files, 'TARGNAME', extension=0)
-filt_all_TA_list = import_keyword_from_files(all_TA_files, 'FILTER', extension=0)
-
-selected_TA_sci_indices = (targname_all_TA_list == targname_sci)
-selected_TA_ref_indices = (targname_all_TA_list == targname_ref)
-selected_TA_sci_files = all_TA_files[selected_TA_sci_indices]
-selected_TA_ref_files = all_TA_files[selected_TA_ref_indices]
-
-print('Number of selected SCI files: {}'.format(len(selected_TA_sci_files)))
-print('Number of selected REF files: {}'.format(len(selected_TA_ref_files)))
-
-
-# PA_V3_sci = import_keyword_from_files(cal2_sci_files, 'PA_V3', extension=1)
-phot_MJySr_TA_sci = import_keyword_from_files(selected_TA_sci_files, 'PHOTMJSR', extension=1)
-phot_uJyA2_TA_sci = import_keyword_from_files(selected_TA_sci_files, 'PHOTUJA2', extension=1)
-scaling_values_TA_sci = phot_uJyA2_TA_sci/(1000*phot_MJySr_TA_sci)
-target_acq_sci_cube = import_data_cube_from_files(selected_TA_sci_files, scaling_list=scaling_values_TA_sci)
-dims = (np.shape(cal2_sci_cube))[-2:]
-n_sci_files = len(cal2_sci_files)
-n_sci_int = (np.shape(cal2_sci_cube))[1]
-print('Number of exposures: {}'.format(n_sci_files))
-print('Number of integrations: {}'.format(n_sci_int))
-print('Number of rolls: {}'.format(len(np.unique(PA_V3_sci))))
-print('Image dimensions: {}'.format(dims))
-
-display_grid_of_images_from_cube(cal2_sci_cube, vmax, logNorm=False, 
-                                 suptitle='CAL 2 HD141569  '+filt)
 
 
 
@@ -666,15 +898,15 @@ scaling_values = phot_uJyA2_sci/(1000*phot_MJySr_sci)
 cal2_sci_cube = import_data_cube_from_files(cal2_sci_files, scaling_list=scaling_values)
 dims = (np.shape(cal2_sci_cube))[-2:]
 n_sci_files = len(cal2_sci_files)
-n_sci_int = (np.shape(cal2_sci_cube))[1]
+n_sci_int_all = (np.shape(cal2_sci_cube))[1]
 print('Number of exposures: {}'.format(n_sci_files))
-print('Number of integrations: {}'.format(n_sci_int))
+print('Number of integrations: {}'.format(n_sci_int_all))
 print('Number of rolls: {}'.format(len(np.unique(PA_V3_sci))))
+print('Roll angles" {}'.format(np.diff(np.unique(PA_V3_sci))))
 print('Image dimensions: {}'.format(dims))
 
 display_grid_of_images_from_cube(cal2_sci_cube, vmax, logNorm=False, 
                                  suptitle='CAL 2 HD141569  '+filt)
-
 
 
 
@@ -686,9 +918,9 @@ phot_uJyA2_ref = import_keyword_from_files(cal2_ref_files, 'PHOTUJA2', extension
 scaling_values_ref = phot_uJyA2_ref/(1000*phot_MJySr_ref)
 cal2_ref_cube = import_data_cube_from_files(cal2_ref_files, scaling_list=scaling_values_ref)
 n_ref_files = len(cal2_ref_cube)
-n_ref_int = (np.shape(cal2_ref_cube))[1]
+n_ref_int_all = (np.shape(cal2_ref_cube))[1]
 print('Number of exposures: {}'.format(n_ref_files))
-print('Number of integrations: {}'.format(n_ref_int))
+print('Number of integrations: {}'.format(n_ref_int_all))
 # print('Number of rolls: {}'.format(len(np.unique(PA_V3_ref))))
 
 display_grid_of_images_from_cube(cal2_ref_cube, vmax, logNorm=False, 
@@ -703,9 +935,9 @@ phot_uJyA2_bck_sci = import_keyword_from_files(cal2_bck_sci_files, 'PHOTUJA2', e
 scaling_values_bck_sci = phot_uJyA2_bck_sci/(1000*phot_MJySr_bck_sci)
 cal2_bck_sci_cube = import_data_cube_from_files(cal2_bck_sci_files, scaling_list=scaling_values_bck_sci)
 n_bck_sci_files = len(cal2_bck_sci_cube)
-n_bck_sci_int = (np.shape(cal2_bck_sci_cube))[1]
+n_bck_sci_int_all = (np.shape(cal2_bck_sci_cube))[1]
 print('Number of exposures: {}'.format(n_bck_sci_files))
-print('Number of integrations: {}'.format(n_bck_sci_int))
+print('Number of integrations: {}'.format(n_bck_sci_int_all))
 
 display_grid_of_images_from_cube(cal2_bck_sci_cube, vmax, logNorm=False, 
                                  suptitle='CAL 2 BACKGROUND SCI  '+filt)
@@ -717,9 +949,9 @@ phot_uJyA2_bck_ref = import_keyword_from_files(cal2_bck_ref_files, 'PHOTUJA2', e
 scaling_values_bck_ref = phot_uJyA2_bck_ref/(1000*phot_MJySr_bck_ref)
 cal2_bck_ref_cube = import_data_cube_from_files(cal2_bck_ref_files, scaling_list=scaling_values_bck_ref)
 n_bck_ref_files = len(cal2_bck_ref_cube)
-n_bck_ref_int = (np.shape(cal2_bck_ref_cube))[1]
+n_bck_ref_int_all = (np.shape(cal2_bck_ref_cube))[1]
 print('Number of exposures: {}'.format(n_bck_ref_files))
-print('Number of integrations: {}'.format(n_bck_ref_int))
+print('Number of integrations: {}'.format(n_bck_ref_int_all))
 
 display_grid_of_images_from_cube(cal2_bck_ref_cube, vmax, logNorm=False, 
                                  suptitle='CAL 2 BACKGROUND REF  '+filt)
@@ -734,6 +966,7 @@ debug = False
 display_all = True
 verbose = False
 
+discard_first_ints = True
 
 ## Parameters for Median-filtering the bad pixels:
 median_filt_thresh = 3 #sigma
@@ -765,6 +998,15 @@ bck_saber_glow_width = 9 #pix
 bck_saber_glow_angle = 5 #deg
 
 
+## Parameters for star-centering
+rough_xpos_BC = np.array([[138.1, 139.1], [149.1,152.1]]) - 1
+rough_ypos_BC = np.array([[45.9, 34.0], [49.9,38.2]]) - 1
+# rough_xpos_BC = [[138.1, 139.1], [149.1,152.1]]
+# rough_ypos_BC = [[45.9, 34.0], [49.9,38.2]]
+centroid_box_size = 7
+centroid_method = centroid_2dg
+
+
 
 ## Parameters for the PSF subtraction
 psf_subtraction_method = 'classical-Ref-Averaged' # 'classical-Ref-Averaged'  'No-Subtraction'
@@ -786,14 +1028,13 @@ fqpm_angle = 5 #deg
 cropsize = 101
 
 # Parameters for exporting the outputs
-export_tmp_filesQ = True
-saveCombinedImageQ = True
+export_tmp_filesQ = False
+saveCombinedImageQ = False
 overWriteQ = True
+save_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_PROCESSED'
+
 basename_sci = 'HD141569_'+filt+'_v1'
 filename_output = basename_sci + '_combined.fits'
-if saveCombinedImageQ:
-    os.makedirs(path_output, exist_ok=overWriteQ)
-
 
 
 ''' Reduction notes:
@@ -804,52 +1045,29 @@ if saveCombinedImageQ:
 '''
 
 
+
+#****** Cleaning the bad pixels  ******
+if discard_first_ints: print('--- Discarding the first integrations ---')
+init_int = 1 if discard_first_ints else 0
+n_sci_int = n_sci_int_all - 1 if discard_first_ints else n_sci_int_all
+n_ref_int = n_ref_int_all - 1 if discard_first_ints else n_ref_int_all
+n_bck_sci_int = n_bck_sci_int_all - 1 if discard_first_ints else n_bck_sci_int_all
+n_bck_ref_int = n_bck_ref_int_all - 1 if discard_first_ints else n_bck_ref_int_all
+
+
 #****** Cleaning the bad pixels  ******
 print('--- Cleaning the data from bad pixels ---')
 # NOTE: consider using the DQ maps too
-cal2_sci_cube_clean = median_filter_cube(cal2_sci_cube, median_filt_box_size, median_filt_thresh, 
-                                        iter_max=median_filt_iter_max, verbose=verbose)
-cal2_ref_cube_clean = median_filter_cube(cal2_ref_cube, median_filt_box_size, median_filt_thresh, 
-                                        iter_max=median_filt_iter_max, verbose=verbose)
 
-cal2_bck_sci_cube_clean = median_filter_cube(cal2_bck_sci_cube, median_filt_box_size, median_filt_thresh, 
+cal2_sci_cube_clean = median_filter_cube(cal2_sci_cube[:, init_int:], median_filt_box_size, median_filt_thresh, 
                                         iter_max=median_filt_iter_max, verbose=verbose)
-cal2_bck_ref_cube_clean = median_filter_cube(cal2_bck_ref_cube, median_filt_box_size, median_filt_thresh, 
+cal2_ref_cube_clean = median_filter_cube(cal2_ref_cube[:, init_int:], median_filt_box_size, median_filt_thresh, 
                                         iter_max=median_filt_iter_max, verbose=verbose)
 
-#****** Frame Registration  ******
-# TODO: Register the SCI frames with companion
-# TODO: Register the REF frames?
-# TODO: update to using the 4D cal2_ref_cube_clean cube again instead of cal2_ref_cube_filt_list
-if debug:
-    template = cal2_ref_cube_filt_list[0]
-    reg_mask = ~create_mask(40, dims, cent=crop_center)  #np.ones(dims, dtype=bool)
-    reg_sol_list = np.empty((n_ref_frames, 4))
-    for i in range(n_ref_frames):
-        reg_init = np.array([0, 0, 1]) + 0.1 * np.random.randn(3)
-        reg_sol = minimize(reg_criterion, reg_init, args=(cal2_ref_cube_filt_list[i], template, reg_mask), tol=1e-5)
-        dx, dy, nu = reg_sol.x
-        reg_crit = reg_criterion(reg_sol.x, cal2_ref_cube_filt_list[i], template, reg_mask)
-        reg_sol_list[i] = np.append(reg_sol.x, [reg_crit]) 
-        print('Success!') if reg_sol.success else print(reg_sol.message)
-        message = '     dx = {:.3f}"    dy = {:.3f}"    nu = {:.2f}    crit = {:.2f}'
-        print(message.format(dx*0.11, dy*0.11, nu, reg_crit))
-    
-    #display_grid_of_images_from_cube(cal2_ref_cube_filt, vmax/30)
-    fig13, ax13 = plt.subplots(1,n_ref_frames,figsize=(2*n_ref_frames,2), dpi=130)
-    images = []
-    for i in range(n_ref_frames):
-        dx, dy, nu , crit_val = reg_sol_list[i]
-        diff = (nu * shift_interp(cal2_ref_cube_filt_list[i], [dx, dy]) - template) * reg_mask
-        images.append(ax13[i].imshow(diff, vmin=-vmax/30, vmax=vmax/30))
-        ax13[i].set_title('crit: {:.2f}'.format(crit_val))
-    plt.tight_layout()
-    cbar = fig13.colorbar(images[0], ax=ax13)
-    plt.show()
-
-
-star_center_sci = fqpm_center
-star_center_ref = fqpm_center
+cal2_bck_sci_cube_clean = median_filter_cube(cal2_bck_sci_cube[:, init_int:], median_filt_box_size, median_filt_thresh, 
+                                        iter_max=median_filt_iter_max, verbose=verbose)
+cal2_bck_ref_cube_clean = median_filter_cube(cal2_bck_ref_cube[:, init_int:], median_filt_box_size, median_filt_thresh, 
+                                        iter_max=median_filt_iter_max, verbose=verbose)
 
 
 #****** Background subtraction  ******
@@ -929,7 +1147,89 @@ if export_tmp_filesQ:
     
 
 
+
+#****** Frame Registration  ******
+
+# Companion star fine centers
+fine_xpos_BC = np.empty((n_sci_files, n_sci_int, 2))
+fine_ypos_BC = np.empty((n_sci_files, n_sci_int, 2))
+for i in range(n_sci_files):
+    for j in range(n_sci_int):
+        x, y = centroid_sources(cal2_sci_cube_bck_sub[i,j], 
+                                rough_xpos_BC[i], rough_ypos_BC[i], 
+                                box_size=centroid_box_size, centroid_func=centroid_method)
+        fine_xpos_BC[i,j,:] = x
+        fine_ypos_BC[i,j,:] = y
+
+if display_all:
+    labelStars = ['B star', 'C star']
+    fig1, ax1 = plt.subplots(2,n_sci_files,figsize=(4*n_sci_files, 4*2), dpi=130)
+    for i in range(n_sci_files):
+        for j in range(2):
+            ax1[i,j].scatter(fine_xpos_BC[i,:,j], fine_ypos_BC[i,:,j], marker='x') 
+            ax1[i,j].set_title('{} - Roll {}'.format(labelStars[j], i))
+            ax1[i,j].set_xlim(fine_xpos_BC[i,:,j].mean()+ np.array([-1, 1])*0.03)
+            ax1[i,j].set_ylim(fine_ypos_BC[i,:,j].mean()+ np.array([-1, 1])*0.03)
+    plt.tight_layout()
+    plt.show()
+    
+    fig2, ax2 = plt.subplots(n_sci_files, n_sci_int, figsize=(4*n_sci_int, 4*n_sci_files), dpi=130)
+    for i in range(n_sci_files):
+        for j in range(n_sci_int):
+            ax2[i,j].imshow(cal2_sci_cube_bck_sub[i,j,:,:], vmin=vmin_lin, vmax=vmax*3,interpolation='nearest')
+            for k in range(2):
+                ax2[i,j].scatter(fine_xpos_BC[i,j,k], fine_ypos_BC[i,j,k], marker='x', color='blue',s=100)    
+            ax2[i,j].set_xlim(fine_xpos_BC[i,j].mean()+ np.array([-1, 1])*15)
+            ax2[i,j].set_ylim(fine_ypos_BC[i,j].mean()+ np.array([-1, 1])*15)
+    plt.tight_layout()
+    plt.show()
+
+#TODO: print the pointing stability with STD of integrations
+# TODO: think if I median B position along the int. axis (maybe not to preserve best centering for each integration)
+x_offset_A_from_B_sci = np.median(fine_xpos_BC[:,:,0], axis=1) - best_sep_A_from_B[0] * np.sin((best_pa_A_from_B[0] - PA_V3_sci)*np.pi/180)/pixsize 
+y_offset_A_from_B_sci = np.median(fine_ypos_BC[:,:,0], axis=1) + best_sep_A_from_B[0] * np.cos((best_pa_A_from_B[0] - PA_V3_sci)*np.pi/180)/pixsize 
+
+
+
+
+# TODO: Register the SCI frames with companion
+# TODO: Register the REF frames?
+# TODO: update to using the 4D cal2_ref_cube_clean cube again instead of cal2_ref_cube_filt_list
+if debug:
+    template = cal2_ref_cube_filt_list[0]
+    reg_mask = ~create_mask(40, dims, cent=crop_center)  #np.ones(dims, dtype=bool)
+    reg_sol_list = np.empty((n_ref_frames, 4))
+    for i in range(n_ref_frames):
+        reg_init = np.array([0, 0, 1]) + 0.1 * np.random.randn(3)
+        reg_sol = minimize(reg_criterion, reg_init, args=(cal2_ref_cube_filt_list[i], template, reg_mask), tol=1e-5)
+        dx, dy, nu = reg_sol.x
+        reg_crit = reg_criterion(reg_sol.x, cal2_ref_cube_filt_list[i], template, reg_mask)
+        reg_sol_list[i] = np.append(reg_sol.x, [reg_crit]) 
+        print('Success!') if reg_sol.success else print(reg_sol.message)
+        message = '     dx = {:.3f}"    dy = {:.3f}"    nu = {:.2f}    crit = {:.2f}'
+        print(message.format(dx*0.11, dy*0.11, nu, reg_crit))
+    
+    #display_grid_of_images_from_cube(cal2_ref_cube_filt, vmax/30)
+    fig13, ax13 = plt.subplots(1,n_ref_frames,figsize=(2*n_ref_frames,2), dpi=130)
+    images = []
+    for i in range(n_ref_frames):
+        dx, dy, nu , crit_val = reg_sol_list[i]
+        diff = (nu * shift_interp(cal2_ref_cube_filt_list[i], [dx, dy]) - template) * reg_mask
+        images.append(ax13[i].imshow(diff, vmin=-vmax/30, vmax=vmax/30))
+        ax13[i].set_title('crit: {:.2f}'.format(crit_val))
+    plt.tight_layout()
+    cbar = fig13.colorbar(images[0], ax=ax13)
+    plt.show()
+
+
+star_center_sci = fqpm_center
+star_center_ref = fqpm_center
+
+
+
+
 ### Classical subtraction of the SCI PSF
+# TODO: implement subtraction with the separate REF dither frames (lower noise but better subtraction?)
 if psf_subtraction_method == 'No-Subtraction':
     cal2_sci_cube_psf_sub = cal2_sci_cube_bck_sub
 elif psf_subtraction_method =='classical-Ref-Averaged':
@@ -985,7 +1285,7 @@ print('Total flux in image: {:.3f} mJy'.format(np.nansum(combined_image)*0.11*0.
 # vmin = 0.1 #median_val*0.8
 # vmax = 10 #3 #max_val*0.7
 fig7, ax7 = plt.subplots(1,1,figsize=(8,6), dpi=130)
-im = ax7.imshow(combined_image, norm=LogNorm(vmin=vmax/1000, vmax=vmax))
+im = ax7.imshow(combined_image, norm=LogNorm(vmin=vmax/100, vmax=vmax))
 # im = ax7.imshow(combined_image, vmin=vmin_lin, vmax=vmax)
 ax7.set_title('COMBINED HD141569  '+filt)
 plt.tight_layout()
@@ -996,11 +1296,15 @@ plt.show()
 
 if saveCombinedImageQ:
     print('--- Saving the reduced images ---')
+    path_output = os.path.join(base_root, save_folder)
+    os.makedirs(path_output, exist_ok=overWriteQ)
+    
     hdu = fits.PrimaryHDU(data=None, header = fits.getheader(cal2_sci_files[0]))
     #Put the data back in the initial untits to match the unit in the header
     
     hdu2 = fits.ImageHDU(combined_image,fits.getheader(cal2_sci_files[0], 1))
     hdu2.header['BUNIT']= 'mJy/arcsec2'
     hdul = fits.HDUList([hdu,hdu2])
+    
     hdul.writeto(os.path.join(path_output, filename_output), overwrite=overWriteQ)
 
