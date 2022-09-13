@@ -8,8 +8,10 @@ It contains two files:
 
 SETTING UP
 It is recommended to set up a dedicated conda environment for this work.
-- Install webbPSF: see https://webbpsf.readthedocs.io/en/latest/installation.html
 - Install the dev veersions  of webbpsf_ext, webbpsf, poppy:
+
+```
 pip install -e git+https://github.com/spacetelescope/poppy.git#egg=poppy
 pip install -e git+https://github.com/spacetelescope/webbpsf.git#egg=webbpsf
 pip install -e git+https://github.com/JarronL/webbpsf_ext#egg=webbpsf_ext
+```
