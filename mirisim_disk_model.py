@@ -126,7 +126,8 @@ star_A_params = {
 
 
 disk_params = {
-    'file': "/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled/HD141569_Model_Pantin_F1065C.fits",
+    # 'file': "/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled/HD141569_Model_Pantin_F1065C.fits",
+    'file': "/home/ematthews/data/JWST/ERS/HD141569A/Disk_Models/DisksFromElodieOct2021/HD141569_Model_Pantin_F1065C.fits",
     'pixscale': 0.027491, 
     'wavelength': 10.65,
     'units': 'Jy/pixel',
@@ -608,5 +609,5 @@ hdr['PIXELSCL'] = inst.pixelscale
 
 name = star_A_params['name']
 
-outfile = f'HD141569/{name}_{inst.aperturename}_{inst.filter}.fits'
+outfile = f'HD141569_models/{name}_{inst.aperturename}_{inst.filter}.fits'
 hdu_diff.writeto(outfile, overwrite=True)
