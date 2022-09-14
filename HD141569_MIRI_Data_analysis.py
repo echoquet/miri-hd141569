@@ -731,7 +731,7 @@ if export_combined_ta:
 
 
 
-#%%
+#%% Identify 4QPM data
 print('##### IDENTIFY CORONAGRAPHIC DATA FILES ### ')
 
 # Parameters to locate / select the datasets:
