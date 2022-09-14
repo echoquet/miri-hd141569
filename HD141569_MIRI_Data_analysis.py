@@ -703,8 +703,8 @@ cbar = fig7.colorbar(im, ax=ax7)
 cbar.ax.set_title('DN/s$')
 plt.show()
 
-coords_B_round = [int(np.round(center_ta_images[0]-best_dec_A_from_B[0]/pixsize)),
-                  int(np.round(center_ta_images[1]+best_ra_A_from_B[0]/pixsize))]
+coords_B_round = [int(np.round(center_ta_images[0]-best_dec_A_from_ref[0]/pixsize)),
+                  int(np.round(center_ta_images[1]+best_ra_A_from_ref[0]/pixsize))]
 fig8, ax8 = plt.subplots(1,1,figsize=(4, 4), dpi=130)
 # ax8.plot(target_acq_sci_cube_combined[center_ta_images[0]]) 
 ax8.plot(target_acq_sci_cube_combined[:, center_ta_images[1]], marker='x') 
