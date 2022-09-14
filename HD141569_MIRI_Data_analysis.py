@@ -410,8 +410,7 @@ pixsize = 0.11
 #%% GLOBAL CONSTANTS
 
 pixsize = 0.11
-# base_root = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets'
-base_root = '/home/ematthews/data/JWST/ERS/HD141569A/EC/'
+base_root = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets'
 
 targname_sci = 'HD 141569'
 targname_ref = 'HD 140986'
@@ -460,7 +459,7 @@ centroid_method_ta = centroid_2dg #centroid_sources, centroid_com, centroid_quad
 ## Parameters for saving the data
 export_combined_ta = True
 overWriteTAQ = True
-combined_ta_folder = 'MIRI_TA_combined_ecm'
+combined_ta_folder = 'MIRI_TA_combined'
 
 
 #############################################################################################
@@ -1102,7 +1101,7 @@ cropsize = 101
 export_tmp_filesQ = False
 saveCombinedImageQ = False
 overWriteQ = False
-save_folder = 'MIRI_PROCESSED_ecm'
+save_folder = 'MIRI_PROCESSED'
 
 basename_sci = 'HD141569_'+filt+'_v3'
 filename_output = basename_sci + '_combined.fits'
@@ -1197,7 +1196,7 @@ display_grid_of_images_from_cube(cal2_ref_cube_bck_sub, vmax/3, #logNorm=False,
 
 if export_tmp_filesQ:
     print('    Exporting the background subtracted data:')
-    path_tmp_folder = 'MIRI_Background_subtracted_ecm'
+    path_tmp_folder = 'MIRI_Background_subtracted'
     path_tmp_output = os.path.join(base_root, path_tmp_folder)
     print(path_tmp_output)
     
