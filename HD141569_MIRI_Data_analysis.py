@@ -412,7 +412,6 @@ pixsize = 0.11
 pixsize = 0.11
 base_root = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets'
 
-
 targname_sci = 'HD 141569'
 targname_ref = 'HD 140986'
 targname_bck = ''

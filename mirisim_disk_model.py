@@ -87,6 +87,240 @@ def quick_ref_psf(idl_coord, inst, out_shape, sp=None):
     return im_psf
 
 
+## time to make the disk mode
+## it's fine to use the same star & PSF grids if we want several disk models
+## of course the disk model needs updating
+def add_disk_into_model(hdul_full, disk_params):
+
+    ##########################  Disk Model Image
+    # Open model and rebin to PSF sampling
+    # Scale to instrument wavelength assuming grey scattering function
+    # Converts to phot/sec/lambda
+    t0_disk =time()
+    hdul_disk_model = image_manip.make_disk_image(inst, disk_params, sp_star=star_A_params['sp'])
+    print('Input disk model shape: {}'.format(hdul_disk_model[0].data.shape))
+
+    fig1, ax1 = plt.subplots(1,1)
+    fig1.suptitle('disk model input')
+    ax1.imshow(hdul_disk_model[0].data, vmin=0,vmax=20)
+    fig1.tight_layout()
+    plt.show()
+
+
+    # Rotation necessary to go from sky coordinates to 'idl' frame
+    rotate_to_idl = -1*(tel_point.siaf_ap_obs.V3IdlYAngle + tel_point.pos_ang)
+
+
+    ### Dither position
+    # Select the first dither location offset
+    delx, dely = tel_point.position_offsets_act[0]
+    #hdul_out = image_manip.rotate_shift_image(hdul_disk_model, PA_offset=rotate_to_idl,
+    #                                          delx_asec=delx, dely_asec=dely)
+
+    ### Modification by Elodie: Warrning message then crash: PA_offset deprecated, replace by angle instead
+    hdul_out = image_manip.rotate_shift_image(hdul_disk_model, angle=rotate_to_idl,
+                                              delx_asec=delx, dely_asec=dely)
+
+    # Distort image on 'sci' coordinate grid
+    im_sci, xsci_im, ysci_im = image_manip.distort_image(hdul_out, ext=0, to_frame='sci', return_coords=True)
+
+    # Distort image onto 'tel' (V2, V3) coordinate grid for plot illustration
+    im_tel, v2_im, v3_im = image_manip.distort_image(hdul_out, ext=0, to_frame='tel', return_coords=True)
+
+
+    '''This particular disk image is oversized, so we will need to crop the image after 
+    convolving PSFs. We may want to consider trimming some of this image prior to convolution,
+     depending on how some of the FoV is blocked before reaching the coronagraphic optics.'''
+     
+    # If the image is too large, then this process will eat up much of your computer's RAM
+    # So, crop image to more reasonable size (20% oversized)
+    xysize = int(1.2 * np.max([siaf_ap.XSciSize,siaf_ap.YSciSize]) * osamp)
+    xy_add = osamp - np.mod(xysize, osamp)
+    xysize += xy_add
+
+    im_sci = pad_or_cut_to_size(im_sci, xysize)
+    hdul_disk_model_sci = fits.HDUList(fits.PrimaryHDU(data=im_sci, header=hdul_out[0].header))
+    print('Resized disk model shape: {}'.format(im_sci.shape))
+
+    fig1, ax1 = plt.subplots(1,1)
+    fig1.suptitle('disk model rotate & resized')
+    ax1.imshow(im_sci, vmin=0,vmax=20)
+    fig1.tight_layout()
+    plt.show()
+
+    # Added by Elodie June 7th after chat with Kim
+    # Get X and Y indices corresponding to aperture reference
+    # xref, yref = self.siaf_ap.reference_point('sci')
+    # hdul_disk_model_sci[0].header['XIND_REF'] = (xref*osamp, "x index of aperture reference")
+    # hdul_disk_model_sci[0].header['YIND_REF'] = (yref*osamp, "y index of aperture reference")
+    hdul_disk_model_sci[0].header['CFRAME'] = 'sci'
+
+    # Convolve image
+    t0 = time()
+    im_conv = image_manip.convolve_image(hdul_disk_model_sci, hdul_psfs)
+    t1 = time()
+    print('Disk Convolution calculation time: {} s'.format(t1-t0))
+    print('Convolved disk shape: {}'.format(im_conv.shape)) #260x260
+
+    fig1, ax1 = plt.subplots(1,1)
+    fig1.suptitle('Convolved disk')
+    ax1.imshow(im_conv, vmin=0,vmax=20)
+    fig1.tight_layout()
+    plt.show()
+
+
+    # Add cropped image to final oversampled image
+    im_conv = pad_or_cut_to_size(im_conv, shape_new)
+    if star_A_Q or star_B_Q or star_C_Q:
+        hdul_full[0].data += im_conv
+    else:
+        hdul_full = fits.HDUList(fits.PrimaryHDU(data=im_conv, header=hdul_disk_model_sci[0].header))
+    print('Resized Convolved disk shape: {}'.format(im_conv.shape)) #432x432
+
+
+
+    # Rebin science data to detector pixels
+    im_sci = image_manip.frebin(hdul_full[0].data, scale=1/osamp)
+    print('Detector sampled final image shape: {}'.format(im_sci.shape)) #216x216
+
+    t1_disk =time()
+
+    print('######################')
+    print('Disk computation time: {} s'.format(t1_disk-t0_disk))
+
+
+    # Subtract a reference PSF from the science data
+    if psf_sub:
+        coord_vals = tel_point.position_offsets_act[0]
+        im_psf = quick_ref_psf(coord_vals, inst, hdul_full[0].data.shape, sp=sp_star)
+        im_ref = image_manip.frebin(im_psf, scale=1/osamp)
+        imdisk = im_sci - im_ref
+    else:
+        imdisk = im_sci
+
+    # De-rotate to sky orientation
+    imrot = image_manip.rotate_offset(imdisk, rotate_to_idl, reshape=False, cval=np.nan)
+
+
+    # Plot results
+    xsize_asec = siaf_ap.XSciSize * siaf_ap.XSciScale
+    ysize_asec = siaf_ap.YSciSize * siaf_ap.YSciScale
+    extent = [-1*xsize_asec/2, xsize_asec/2, -1*ysize_asec/2, ysize_asec/2]
+    fig, axes = plt.subplots(2,2, figsize=(8,8), dpi=300)
+
+    plmax = 0.05 * imdisk.max()
+    axes[0,0].imshow(imdisk, extent=extent, vmin=-0.1 * plmax, vmax=plmax)
+    axes[0,1].imshow(imrot, extent=extent, vmin=-0.1 * plmax, vmax=plmax)
+    axes[0,0].set_title('Raw Image (lin)')
+    axes[0,1].set_title("De-Rotated (lin)")
+
+    plmax = imdisk.max()
+    axes[1,0].imshow(imdisk, extent=extent, norm=LogNorm(vmin=plmax * 1e-5, vmax=plmax))
+    axes[1,1].imshow(imrot, extent=extent, norm=LogNorm(vmin=plmax * 1e-5, vmax=plmax))
+    axes[1,0].set_title('Raw Image (log)')
+    axes[1,1].set_title("De-Rotated (log)")
+
+    for i in range(2):
+        for j in range(2):
+            axes[i,j].set_xlabel('XSci (arcsec)')
+            axes[i,j].set_ylabel('YSci (arcsec)')
+        plotAxes(axes[i,0], angle=-1*siaf_ap.V3SciYAngle)
+        plotAxes(axes[i,1], position=(0.95,0.35), label1='E', label2='N')
+
+    fig.suptitle(f"HD 141569 ({filt})", fontsize=14)
+    fig.tight_layout()
+
+    plt.show()
+
+
+    #%% Figurre Jarron
+    # fig, axes = plt.subplots(1,3, figsize=(12,4.5))
+
+    # ############################
+    # # Plot raw image
+    # ax = axes[0]
+
+    # im = im_sci
+    # mn = np.median(im)
+    # std = np.std(im)
+    # vmin = 0
+    # vmax = mn+10*std
+
+    # xsize_asec = siaf_ap.XSciSize * siaf_ap.XSciScale
+    # ysize_asec = siaf_ap.YSciSize * siaf_ap.YSciScale
+    # extent = [-1*xsize_asec/2, xsize_asec/2, -1*ysize_asec/2, ysize_asec/2]
+    # norm = LogNorm(vmin=im.max()/1e5, vmax=im.max())
+    # ax.imshow(im, extent=extent, norm=norm)
+
+    # ax.set_title("Raw Image (log scale)")
+
+    # ax.set_xlabel('XSci (arcsec)')
+    # ax.set_ylabel('YSci (arcsec)')
+    # plotAxes(ax, angle=-1*siaf_ap.V3SciYAngle)
+
+    # ############################
+    # # Basic PSF subtraction
+    # # Subtract a near-perfect reference PSF
+    # ax = axes[1]
+    # norm = LogNorm(vmin=imdiff.max()/1e5, vmax=imdiff.max())
+    # ax.imshow(imdiff, extent=extent, norm=norm, cmap='magma')
+
+    # ax.set_title("PSF Subtracted (log scale)")
+
+    # ax.set_xlabel('XSci (arcsec)')
+    # ax.set_ylabel('YSci (arcsec)')
+    # plotAxes(ax, angle=-1*siaf_ap.V3SciYAngle)
+
+    # ############################
+    # # De-rotate to sky orientation
+
+    # ax = axes[2]
+    # ax.imshow(imrot, extent=extent, norm=norm, cmap='magma')
+
+    # ax.set_title("De-Rotated (log scale)")
+
+    # ax.set_xlabel('RA offset (arcsec)')
+    # ax.set_ylabel('Dec offset (arcsec)')
+    # plotAxes(ax, position=(0.95,0.35), label1='E', label2='N')
+
+    # fig.suptitle(f"Fomalhaut ({siaf_ap.AperName})", fontsize=14)
+    # fig.tight_layout()
+
+
+    # hdul_disk_model_sci[0].header
+
+
+
+    #%% Save image to FITS file
+    hdu_diff = fits.PrimaryHDU(imdisk)
+
+    copy_keys = [
+        'PIXELSCL', 'DISTANCE', 
+        'INSTRUME', 'FILTER', 'PUPIL', 'CORONMSK',
+        'APERNAME', 'MODULE', 'CHANNEL',
+        'DET_NAME', 'DET_X', 'DET_Y', 'DET_V2', 'DET_V3'
+    ]
+
+    hdr = hdu_diff.header
+    for head_temp in (inst.psf_coeff_header, hdul_out[0].header):
+        for key in copy_keys:
+            try:
+                hdr[key] = (head_temp[key], head_temp.comments[key])
+            except (AttributeError, KeyError):
+                pass
+
+    hdr['PIXELSCL'] = inst.pixelscale
+
+    name = star_A_params['name']
+
+    outfile = f'HD141569_models/{name}_{inst.aperturename}_{inst.filter}.fits'.replace(' ','')
+    hdu_diff.writeto(outfile, overwrite=True)
+
+
+    print('end')
+
+
+
 #%% Simulation parameters
 
 star_A_Q = True
@@ -123,16 +357,6 @@ star_A_params = {
     'Dec_obj' :  -03.92120600474,      # Dec (decimal deg) of source
 }
 
-
-
-disk_params = {
-    'file': "/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled/HD141569_Model_Pantin_F1065C.fits",
-    'pixscale': 0.027491, 
-    'wavelength': 10.65,
-    'units': 'Jy/pixel',
-    'dist' : 116,
-    'cen_star' : True,
-}
 
 star_B_params = {
     'name': 'HD 141569 B', 
@@ -371,242 +595,16 @@ plt.show()
 
 
 
-##########################  Disk Model Image
-# Open model and rebin to PSF sampling
-# Scale to instrument wavelength assuming grey scattering function
-# Converts to phot/sec/lambda
-t0_disk =time()
-hdul_disk_model = image_manip.make_disk_image(inst, disk_params, sp_star=star_A_params['sp'])
-print('Input disk model shape: {}'.format(hdul_disk_model[0].data.shape))
 
-fig1, ax1 = plt.subplots(1,1)
-fig1.suptitle('disk model input')
-ax1.imshow(hdul_disk_model[0].data, vmin=0,vmax=20)
-fig1.tight_layout()
-plt.show()
+disk_params = {
+    # 'file': "/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled/HD141569_Model_Pantin_F1065C.fits",
+    'file': "./radmc_model/images/image_MIRI_FQPM_{}_{}.fits".format(target,10.575),
+    'pixscale': 0.027491, 
+    'wavelength': 10.65,
+    'units': 'Jy/pixel',
+    'dist' : 116,
+    'cen_star' : True,
+}
+add_disk_into_model(hdul_full.copy(),disk_params)
 
 
-# Rotation necessary to go from sky coordinates to 'idl' frame
-rotate_to_idl = -1*(tel_point.siaf_ap_obs.V3IdlYAngle + tel_point.pos_ang)
-
-
-
-
-### Dither position
-# Select the first dither location offset
-delx, dely = tel_point.position_offsets_act[0]
-#hdul_out = image_manip.rotate_shift_image(hdul_disk_model, PA_offset=rotate_to_idl,
-#                                          delx_asec=delx, dely_asec=dely)
-
-### Modification by Elodie: Warrning message then crash: PA_offset deprecated, replace by angle instead
-hdul_out = image_manip.rotate_shift_image(hdul_disk_model, angle=rotate_to_idl,
-                                          delx_asec=delx, dely_asec=dely)
-
-# Distort image on 'sci' coordinate grid
-im_sci, xsci_im, ysci_im = image_manip.distort_image(hdul_out, ext=0, to_frame='sci', return_coords=True)
-
-# Distort image onto 'tel' (V2, V3) coordinate grid for plot illustration
-im_tel, v2_im, v3_im = image_manip.distort_image(hdul_out, ext=0, to_frame='tel', return_coords=True)
-
-
-# Plot locations for PSFs that we will generate
-# Show image in V2/V3 plane
-# fig, ax = plt.subplots(1,1)
-# extent = [v2_im.min(), v2_im.max(), v3_im.min(), v3_im.max()]
-# ax.imshow(im_tel**0.1, extent=extent)
-# # Add on SIAF aperture boundaries
-# tel_point.plot_inst_apertures(ax=ax, clear=False, label=True)
-# tel_point.plot_ref_aperture(ax=ax)
-# tel_point.plot_obs_aperture(ax=ax, color='C3')
-# # Add PSF location points
-# v2, v3 = siaf_ap.convert(xgrid, ygrid, 'sci', 'tel')
-# ax.scatter(v2, v3, marker='.', alpha=0.5, color='C2', edgecolors='none', linewidths=0)
-# ax.set_title('Model disk image and PSF Locations in SIAF FoV')
-# fig.tight_layout()
-
-
-'''This particular disk image is oversized, so we will need to crop the image after 
-convolving PSFs. We may want to consider trimming some of this image prior to convolution,
- depending on how some of the FoV is blocked before reaching the coronagraphic optics.'''
- 
-# If the image is too large, then this process will eat up much of your computer's RAM
-# So, crop image to more reasonable size (20% oversized)
-xysize = int(1.2 * np.max([siaf_ap.XSciSize,siaf_ap.YSciSize]) * osamp)
-xy_add = osamp - np.mod(xysize, osamp)
-xysize += xy_add
-
-im_sci = pad_or_cut_to_size(im_sci, xysize)
-hdul_disk_model_sci = fits.HDUList(fits.PrimaryHDU(data=im_sci, header=hdul_out[0].header))
-print('Resized disk model shape: {}'.format(im_sci.shape))
-
-fig1, ax1 = plt.subplots(1,1)
-fig1.suptitle('disk model rotate & resized')
-ax1.imshow(im_sci, vmin=0,vmax=20)
-fig1.tight_layout()
-plt.show()
-
-# Added by Elodie June 7th after chat with Kim
-# Get X and Y indices corresponding to aperture reference
-# xref, yref = self.siaf_ap.reference_point('sci')
-# hdul_disk_model_sci[0].header['XIND_REF'] = (xref*osamp, "x index of aperture reference")
-# hdul_disk_model_sci[0].header['YIND_REF'] = (yref*osamp, "y index of aperture reference")
-hdul_disk_model_sci[0].header['CFRAME'] = 'sci'
-
-# Convolve image
-t0 = time()
-im_conv = image_manip.convolve_image(hdul_disk_model_sci, hdul_psfs)
-t1 = time()
-print('Disk Convolution calculation time: {} s'.format(t1-t0))
-print('Convolved disk shape: {}'.format(im_conv.shape)) #260x260
-
-fig1, ax1 = plt.subplots(1,1)
-fig1.suptitle('Convolved disk')
-ax1.imshow(im_conv, vmin=0,vmax=20)
-fig1.tight_layout()
-plt.show()
-
-
-# Add cropped image to final oversampled image
-im_conv = pad_or_cut_to_size(im_conv, shape_new)
-if star_A_Q or star_B_Q or star_C_Q:
-    hdul_full[0].data += im_conv
-else:
-    hdul_full = fits.HDUList(fits.PrimaryHDU(data=im_conv, header=hdul_disk_model_sci[0].header))
-print('Resized Convolved disk shape: {}'.format(im_conv.shape)) #432x432
-
-
-
-# Rebin science data to detector pixels
-im_sci = image_manip.frebin(hdul_full[0].data, scale=1/osamp)
-print('Detector sampled final image shape: {}'.format(im_sci.shape)) #216x216
-
-t1_disk =time()
-
-print('######################')
-print('Disk computation time: {} s'.format(t1_disk-t0_disk))
-
-
-# Subtract a reference PSF from the science data
-if psf_sub:
-    coord_vals = tel_point.position_offsets_act[0]
-    im_psf = quick_ref_psf(coord_vals, inst, hdul_full[0].data.shape, sp=sp_star)
-    im_ref = image_manip.frebin(im_psf, scale=1/osamp)
-    imdisk = im_sci - im_ref
-else:
-    imdisk = im_sci
-
-# De-rotate to sky orientation
-imrot = image_manip.rotate_offset(imdisk, rotate_to_idl, reshape=False, cval=np.nan)
-
-
-# Plot results
-xsize_asec = siaf_ap.XSciSize * siaf_ap.XSciScale
-ysize_asec = siaf_ap.YSciSize * siaf_ap.YSciScale
-extent = [-1*xsize_asec/2, xsize_asec/2, -1*ysize_asec/2, ysize_asec/2]
-fig, axes = plt.subplots(2,2, figsize=(8,8), dpi=300)
-
-plmax = 0.05 * imdisk.max()
-axes[0,0].imshow(imdisk, extent=extent, vmin=-0.1 * plmax, vmax=plmax)
-axes[0,1].imshow(imrot, extent=extent, vmin=-0.1 * plmax, vmax=plmax)
-axes[0,0].set_title('Raw Image (lin)')
-axes[0,1].set_title("De-Rotated (lin)")
-
-plmax = imdisk.max()
-axes[1,0].imshow(imdisk, extent=extent, norm=LogNorm(vmin=plmax * 1e-5, vmax=plmax))
-axes[1,1].imshow(imrot, extent=extent, norm=LogNorm(vmin=plmax * 1e-5, vmax=plmax))
-axes[1,0].set_title('Raw Image (log)')
-axes[1,1].set_title("De-Rotated (log)")
-
-for i in range(2):
-    for j in range(2):
-        axes[i,j].set_xlabel('XSci (arcsec)')
-        axes[i,j].set_ylabel('YSci (arcsec)')
-    plotAxes(axes[i,0], angle=-1*siaf_ap.V3SciYAngle)
-    plotAxes(axes[i,1], position=(0.95,0.35), label1='E', label2='N')
-
-fig.suptitle(f"HD 141569 ({filt})", fontsize=14)
-fig.tight_layout()
-
-
-#%% Figurre Jarron
-# fig, axes = plt.subplots(1,3, figsize=(12,4.5))
-
-# ############################
-# # Plot raw image
-# ax = axes[0]
-
-# im = im_sci
-# mn = np.median(im)
-# std = np.std(im)
-# vmin = 0
-# vmax = mn+10*std
-
-# xsize_asec = siaf_ap.XSciSize * siaf_ap.XSciScale
-# ysize_asec = siaf_ap.YSciSize * siaf_ap.YSciScale
-# extent = [-1*xsize_asec/2, xsize_asec/2, -1*ysize_asec/2, ysize_asec/2]
-# norm = LogNorm(vmin=im.max()/1e5, vmax=im.max())
-# ax.imshow(im, extent=extent, norm=norm)
-
-# ax.set_title("Raw Image (log scale)")
-
-# ax.set_xlabel('XSci (arcsec)')
-# ax.set_ylabel('YSci (arcsec)')
-# plotAxes(ax, angle=-1*siaf_ap.V3SciYAngle)
-
-# ############################
-# # Basic PSF subtraction
-# # Subtract a near-perfect reference PSF
-# ax = axes[1]
-# norm = LogNorm(vmin=imdiff.max()/1e5, vmax=imdiff.max())
-# ax.imshow(imdiff, extent=extent, norm=norm, cmap='magma')
-
-# ax.set_title("PSF Subtracted (log scale)")
-
-# ax.set_xlabel('XSci (arcsec)')
-# ax.set_ylabel('YSci (arcsec)')
-# plotAxes(ax, angle=-1*siaf_ap.V3SciYAngle)
-
-# ############################
-# # De-rotate to sky orientation
-
-# ax = axes[2]
-# ax.imshow(imrot, extent=extent, norm=norm, cmap='magma')
-
-# ax.set_title("De-Rotated (log scale)")
-
-# ax.set_xlabel('RA offset (arcsec)')
-# ax.set_ylabel('Dec offset (arcsec)')
-# plotAxes(ax, position=(0.95,0.35), label1='E', label2='N')
-
-# fig.suptitle(f"Fomalhaut ({siaf_ap.AperName})", fontsize=14)
-# fig.tight_layout()
-
-
-# hdul_disk_model_sci[0].header
-
-
-
-#%% Save image to FITS file
-hdu_diff = fits.PrimaryHDU(imdisk)
-
-copy_keys = [
-    'PIXELSCL', 'DISTANCE', 
-    'INSTRUME', 'FILTER', 'PUPIL', 'CORONMSK',
-    'APERNAME', 'MODULE', 'CHANNEL',
-    'DET_NAME', 'DET_X', 'DET_Y', 'DET_V2', 'DET_V3'
-]
-
-hdr = hdu_diff.header
-for head_temp in (inst.psf_coeff_header, hdul_out[0].header):
-    for key in copy_keys:
-        try:
-            hdr[key] = (head_temp[key], head_temp.comments[key])
-        except (AttributeError, KeyError):
-            pass
-
-hdr['PIXELSCL'] = inst.pixelscale
-
-name = star_A_params['name']
-
-outfile = f'HD141569/{name}_{inst.aperturename}_{inst.filter}.fits'
-hdu_diff.writeto(outfile, overwrite=True)
