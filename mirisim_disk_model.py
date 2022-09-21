@@ -32,8 +32,6 @@ plt.rcParams["image.cmap"] = 'gist_heat'#'hot'#'copper'
 # TODO: make sure the central star is removed from the model if flag in dictionary is false
 # TODO: Check that the flux matches the simulation (photometry is preserved)
 # Simplify the code to keep the smaller FOV instead of full detector size
-# Remove or make optional the PSF subtraction and derotation
-# convert the code in a pure disk simulation (no star, no psf sibtraction)
 # add support for mcfost (?) or convert into a functionto include in another simulation code
 
 
@@ -99,12 +97,7 @@ def generate_star_psf(star_params, tel_point, inst, shape_new):
     It includes geometric distortions based on SIAF info. 
     shape_new is the oversampled shape.
     '''
-    
-    # if 'sp' not in star_params:
-    #     sp_star = make_spec(**star_params)
-    #     star_params['sp'] = sp_star
-        
-    
+
     # Get `sci` position of center in units of detector pixels (center of mask)
     siaf_ap = tel_point.siaf_ap_obs
     x_cen, y_cen = siaf_ap.reference_point('sci')
@@ -142,7 +135,7 @@ def generate_star_psf(star_params, tel_point, inst, shape_new):
 ## time to make the disk mode
 ## it's fine to use the same star & PSF grids if we want several disk models
 ## of course the disk model needs updating
-def add_disk_into_model(disk_params, hdul_psfs, tel_point, inst, shape_new, star_params):
+def add_disk_into_model(disk_params, hdul_psfs, tel_point, inst, shape_new, star_params, display=True):
     '''
     Properly including extended objects is a little more complicated than for point sources. 
     First, we need properly format the input model to a pixel binning and flux units 
@@ -159,11 +152,12 @@ def add_disk_into_model(disk_params, hdul_psfs, tel_point, inst, shape_new, star
     hdul_disk_model = image_manip.make_disk_image(inst, disk_params, sp_star=sp_star)
     print('Input disk model shape: {}'.format(hdul_disk_model[0].data.shape))
 
-    fig1, ax1 = plt.subplots(1,1)
-    fig1.suptitle('disk model input')
-    ax1.imshow(hdul_disk_model[0].data, vmin=0,vmax=20)
-    fig1.tight_layout()
-    plt.show()
+    if display:
+        fig1, ax1 = plt.subplots(1,1)
+        fig1.suptitle('disk model input')
+        ax1.imshow(hdul_disk_model[0].data, vmin=0,vmax=20)
+        fig1.tight_layout()
+        plt.show()
 
 
     # Rotation necessary to go from sky coordinates to 'idl' frame
@@ -204,11 +198,12 @@ def add_disk_into_model(disk_params, hdul_psfs, tel_point, inst, shape_new, star
     hdul_disk_model_sci = fits.HDUList(fits.PrimaryHDU(data=im_sci, header=hdul_out[0].header))
     print('Resized disk model shape: {}'.format(im_sci.shape))
 
-    fig1, ax1 = plt.subplots(1,1)
-    fig1.suptitle('disk model rotate & resized')
-    ax1.imshow(im_sci, vmin=0,vmax=20)
-    fig1.tight_layout()
-    plt.show()
+    if display:
+        fig1, ax1 = plt.subplots(1,1)
+        fig1.suptitle('disk model rotate & resized')
+        ax1.imshow(im_sci, vmin=0,vmax=20)
+        fig1.tight_layout()
+        plt.show()
 
     # Added by Elodie June 7th after chat with Kim
     # Get X and Y indices corresponding to aperture reference
@@ -224,11 +219,12 @@ def add_disk_into_model(disk_params, hdul_psfs, tel_point, inst, shape_new, star
     print('Disk Convolution calculation time: {} s'.format(t1-t0))
     print('Convolved disk shape: {}'.format(im_conv.shape)) #260x260
 
-    fig1, ax1 = plt.subplots(1,1)
-    fig1.suptitle('Convolved disk')
-    ax1.imshow(im_conv, vmin=0,vmax=20)
-    fig1.tight_layout()
-    plt.show()
+    if display:
+        fig1, ax1 = plt.subplots(1,1)
+        fig1.suptitle('Convolved disk')
+        ax1.imshow(im_conv, vmin=0,vmax=20)
+        fig1.tight_layout()
+        plt.show()
     
     # Crop or Expand the PSF to full frame and offset to proper position
     # TODO: Ask Jarron if this shouldn't also need the offset_vals as for the stars
@@ -459,9 +455,6 @@ elif mask_id == '1550':
 
 n_obs = len(pos_ang_list)
 
-# pos_ang = 115            # Position angle is angle of V3 axis rotated towards East
-# base_offset=(0.2,0)        # Pointing offsets [arcsec] (BaseX, BaseY) columns in .pointing file
-# dith_offsets = [(0,0)]   # list of nominal dither offsets [arcsec] (DithX, DithY) columns in .pointing file 
 
 # Information necessary to create pysynphot spectrum of star
 star_A_params = {
@@ -655,15 +648,7 @@ for obs in range(n_obs):
     if display_all_Q and (star_A_Q or star_B_Q or star_C_Q):
         fig, ax = plt.subplots(1,1)
         fig.suptitle('Oversampled image stars '+filt)
-        # extent = 0.5 * np.array([-1,1,-1,1]) * inst.fov_pix * inst.pixelscale
-        ax.imshow(obs_image_over, vmin=-0.5,vmax=1) #, extent=extent, cmap='magma',
-        # ax.set_xlabel('Arcsec')
-        # ax.set_ylabel('Arcsec')
-        # ax.tick_params(axis='both', color='white', which='both')
-        # for k in ax.spines.keys():
-        #     ax.spines[k].set_color('white')
-        # ax.xaxis.get_major_locator().set_params(nbins=9, steps=[1, 2, 5, 10])
-        # ax.yaxis.get_major_locator().set_params(nbins=9, steps=[1, 2, 5, 10])
+        ax.imshow(obs_image_over, vmin=-0.5,vmax=1) 
         fig.tight_layout()
         plt.show()
     
@@ -678,15 +663,7 @@ for obs in range(n_obs):
     if display_all_Q :
         fig, ax = plt.subplots(1,1)
         fig.suptitle('Oversampled full image '+filt)
-        # extent = 0.5 * np.array([-1,1,-1,1]) * inst.fov_pix * inst.pixelscale
-        ax.imshow(obs_image_over, vmin=-0.5,vmax=1) #, extent=extent, cmap='magma',
-        # ax.set_xlabel('Arcsec')
-        # ax.set_ylabel('Arcsec')
-        # ax.tick_params(axis='both', color='white', which='both')
-        # for k in ax.spines.keys():
-        #     ax.spines[k].set_color('white')
-        # ax.xaxis.get_major_locator().set_params(nbins=9, steps=[1, 2, 5, 10])
-        # ax.yaxis.get_major_locator().set_params(nbins=9, steps=[1, 2, 5, 10])
+        ax.imshow(obs_image_over, vmin=-0.5,vmax=1) 
         fig.tight_layout()
         plt.show()
 
@@ -733,7 +710,7 @@ cropsize = 101
 model_image_full = np.nanmean(obs_image_derot_list, axis=0)
 model_image = resize(model_image_full, [cropsize,cropsize]) #, cent=np.round(star_center_sci).astype(int)) 
 
-# vmin = 0.1 #median_val*0.8
+
 vmax = 700
 fig7, ax7 = plt.subplots(1,1,figsize=(8,6), dpi=130)
 im = ax7.imshow(model_image, norm=LogNorm(vmin=vmax/500, vmax=vmax))
@@ -744,140 +721,5 @@ cbar = fig7.colorbar(im, ax=ax7)
 cbar.ax.set_title('Units TBD$')
 plt.show()
 
-
-
-
-    # # Plot results
-    # xsize_asec = siaf_ap.XSciSize * siaf_ap.XSciScale
-    # ysize_asec = siaf_ap.YSciSize * siaf_ap.YSciScale
-    # extent = [-1*xsize_asec/2, xsize_asec/2, -1*ysize_asec/2, ysize_asec/2]
-    # fig, axes = plt.subplots(2,2, figsize=(8,8), dpi=300)
-
-    # plmax = 0.05 * imdisk.max()
-    # axes[0,0].imshow(imdisk, extent=extent, vmin=-0.1 * plmax, vmax=plmax)
-    # axes[0,1].imshow(imrot, extent=extent, vmin=-0.1 * plmax, vmax=plmax)
-    # axes[0,0].set_title('Raw Image (lin)')
-    # axes[0,1].set_title("De-Rotated (lin)")
-
-    # plmax = imdisk.max()
-    # axes[1,0].imshow(imdisk, extent=extent, norm=LogNorm(vmin=plmax * 1e-5, vmax=plmax))
-    # axes[1,1].imshow(imrot, extent=extent, norm=LogNorm(vmin=plmax * 1e-5, vmax=plmax))
-    # axes[1,0].set_title('Raw Image (log)')
-    # axes[1,1].set_title("De-Rotated (log)")
-
-    # for i in range(2):
-    #     for j in range(2):
-    #         axes[i,j].set_xlabel('XSci (arcsec)')
-    #         axes[i,j].set_ylabel('YSci (arcsec)')
-    #     plotAxes(axes[i,0], angle=-1*siaf_ap.V3SciYAngle)
-    #     plotAxes(axes[i,1], position=(0.95,0.35), label1='E', label2='N')
-
-    # fig.suptitle(f"HD 141569 ({filt})", fontsize=14)
-    # fig.tight_layout()
-
-    # plt.show()
-
-    
-#%% Add central source
-# '''
-# Here we define the stellar atmosphere parameters for HD 141569, including spectral type, 
-# optional values for (Teff, log_g, metallicity), normalization flux and bandpass, 
-# as well as RA and Dec.
-# Then Computes the PSF, including any offset/dither, using the coefficients.
-# It includes geometric distortions based on SIAF info. 
-# '''
-# # Create stellar spectrum and add to dictionary
-# sp_star = make_spec(**star_A_params)
-# star_A_params['sp'] = sp_star
-  
-# if star_A_Q:
-  
-#     # Get `sci` coord positions
-#     coord_obj = (star_A_params['RA_obj'], star_A_params['Dec_obj'])
-#     xsci, ysci = tel_point.radec_to_frame(coord_obj, frame_out='sci')
-    
-#     # Create oversampled PSF
-#     hdul = inst.calc_psf_from_coeff(sp=sp_star, coord_vals=(xsci,ysci), coord_frame='sci')
-
-    
-#     # Get the shifts from center and oversampled pixel shifts
-#     xsci_off, ysci_off = (xsci-x_cen, ysci-y_cen)
-#     delyx = (ysci_off * osamp, xsci_off * osamp)
-#     print("Image shifts (oversampled pixels):", delyx) #xsci_off_over, ysci_off_over)
-    
-#     # Expand PSF to full frame and offset to proper position
-#     image_full = pad_or_cut_to_size(hdul[0].data, shape_new, offset_vals=delyx)
-#     print('Size image (oversampled): {}'.format(image_full.shape))
-    
-#     # fig, ax = plt.subplots(1,1)
-#     # ax.imshow(image_full, vmin=-0.5,vmax=1)
-    
-#     # Make new HDUList of target (just central source so far)
-#     hdul_full = fits.HDUList(fits.PrimaryHDU(data=image_full, header=hdul[0].header))
-    
-
-#%% Add the stellar companions
-
-# if star_B_Q:
-#     sp_star_B = make_spec(**star_B_params)
-#     star_B_params['sp'] = sp_star_B
-    
-#     coord_star_B = (star_B_params['RA_obj'], star_B_params['Dec_obj'])
-#     xstar_B, ystar_B = tel_point.radec_to_frame(coord_star_B, frame_out='sci')
-#     hdul_B = inst.calc_psf_from_coeff(sp=sp_star_B, coord_vals=(xstar_B, ystar_B), coord_frame='sci')
-    
-#     xstar_B_off, ystar_B_off = (xstar_B-x_cen, ystar_B-y_cen)
-#     delyx_B = (ystar_B_off * osamp, xstar_B_off * osamp)
-    
-#     image_full_B = pad_or_cut_to_size(hdul_B[0].data, shape_new, offset_vals=delyx_B)
-    
-#     if star_A_Q: 
-#         hdul_full[0].data += image_full_B
-#     else:
-#         hdul_full = fits.HDUList(fits.PrimaryHDU(data=image_full_B, header=hdul_B[0].header))
-
-
-# if star_C_Q:
-#     sp_star_C = make_spec(**star_C_params)
-#     star_C_params['sp'] = sp_star_C
-    
-#     coord_star_C = (star_C_params['RA_obj'], star_C_params['Dec_obj'])
-#     xstar_C, ystar_C = tel_point.radec_to_frame(coord_star_C, frame_out='sci')
-#     hdul_C = inst.calc_psf_from_coeff(sp=sp_star_C, coord_vals=(xstar_C, ystar_C), coord_frame='sci')
-    
-#     xstar_C_off, ystar_C_off = (xstar_C-x_cen, ystar_C-y_cen)
-#     delyx_C = (ystar_C_off * osamp, xstar_C_off * osamp)
-    
-#     image_full_C = pad_or_cut_to_size(hdul_C[0].data, shape_new, offset_vals=delyx_C)
-    
-#     if star_A_Q or star_B_Q: 
-#         hdul_full[0].data += image_full_C
-#     else:
-#         hdul_full = fits.HDUList(fits.PrimaryHDU(data=image_full_C, header=hdul_C[0].header))
-    
-
-# # Print the results
-# if star_A_Q or star_B_Q or star_C_Q:
-#     fig, ax = plt.subplots(1,1)
-#     fig.suptitle('Oversampled image stars '+filt)
-#     # extent = 0.5 * np.array([-1,1,-1,1]) * inst.fov_pix * inst.pixelscale
-#     ax.imshow(hdul_full[0].data, vmin=-0.5,vmax=1) #, extent=extent, cmap='magma',
-#     # ax.set_xlabel('Arcsec')
-#     # ax.set_ylabel('Arcsec')
-#     # ax.tick_params(axis='both', color='white', which='both')
-#     # for k in ax.spines.keys():
-#     #     ax.spines[k].set_color('white')
-#     # ax.xaxis.get_major_locator().set_params(nbins=9, steps=[1, 2, 5, 10])
-#     # ax.yaxis.get_major_locator().set_params(nbins=9, steps=[1, 2, 5, 10])
-#     fig.tight_layout()
-#     plt.show()
-
-#%% Convolve extended disk image
-
-
-
-
-
-# add_disk_into_model(hdul_full.copy(),disk_params)
 
 
