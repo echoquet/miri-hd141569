@@ -56,6 +56,54 @@ def make_spec(name=None, sptype=None, flux=None, flux_units=None, bp_ref=None, *
     return sp
 
 
+def generate_star_psf(star_params, tel_point, inst, shape_new):
+    '''
+    Here we define the stellar atmosphere parameters for HD 141569, including spectral type, 
+    optional values for (Teff, log_g, metallicity), normalization flux and bandpass, 
+    as well as RA and Dec.
+    Then Computes the PSF, including any offset/dither, using the coefficients.
+    It includes geometric distortions based on SIAF info. 
+    shape_new is the oversampled shape.
+    '''
+    
+    # if 'sp' not in star_params:
+    #     sp_star = make_spec(**star_params)
+    #     star_params['sp'] = sp_star
+        
+    
+    # Get `sci` position of center in units of detector pixels (center of mask)
+    siaf_ap = tel_point.siaf_ap_obs
+    x_cen, y_cen = siaf_ap.reference_point('sci')
+    
+    # Get `sci` position of the star, including offsets, errors, and dither  
+    coord_obj = (star_params['RA_obj'], star_params['Dec_obj'])
+    x_star, y_star = tel_point.radec_to_frame(coord_obj, frame_out='sci')
+    
+    # Get the corresponding shift from center (in regular detector pixel unit)
+    x_star_off, y_star_off = (x_star-x_cen, y_star-y_cen)
+    
+    
+    # Create PSF with oversampling (included in `inst`)
+    # hdul = inst.calc_psf_from_coeff(sp=sp_star, coord_vals=(x_star,y_star), coord_frame='sci')
+    sp_star = make_spec(**star_params)
+    psf_image = inst.calc_psf_from_coeff(sp=sp_star, coord_vals=(x_star,y_star), coord_frame='sci', return_hdul=False)
+
+    # Get oversampled pixel shifts
+    osamp = inst.oversample
+    star_off_oversamp = (y_star_off * osamp, x_star_off * osamp)
+    
+    # Crop or Expand the PSF to full frame and offset to proper position
+    psf_image_full = pad_or_cut_to_size(psf_image, shape_new, offset_vals=star_off_oversamp)
+    # print('Size image (oversampled): {}'.format(image_full.shape))
+    
+  
+    # Make new HDUList with the star
+    # hdul_full = fits.HDUList(fits.PrimaryHDU(data=psf_image_full, header=hdul[0].header))
+    
+    return psf_image_full
+
+
+
 def quick_ref_psf(idl_coord, inst, out_shape, sp=None):
     """
     Create a quick reference PSF for subtraction of the science target.
@@ -339,12 +387,33 @@ pupil = 'MASKFQPM'
 # MIRI 4QPM: 24" x24" at 0.11 pixels, so 219x219 pixels
 # MIRISim synthetic datasets: 224 x 288
 fov_pix = 100 #256
-osamp = 2
+osamp = 3
 
 
-pos_ang = 115            # Position angle is angle of V3 axis rotated towards East
-base_offset=(0,0)        # Pointing offsets [arcsec] (BaseX, BaseY) columns in .pointing file
-dith_offsets = [(0,0)]   # list of nominal dither offsets [arcsec] (DithX, DithY) columns in .pointing file 
+# Observations structure and parameters
+if mask_id == '1065':
+    pos_ang_list = [107.73513043, 117.36721388]            #deg, list of telescope V3 axis PA for each observation
+    base_offset_list =[(0,0), (0,0)]                       #arcsec, list of nominal pointing offsets for each observation ((BaseX, BaseY) columns in .pointing file)
+    dith_offsets_list = [[(0,0)], [(0,0)]]                 #arcsec, list of nominal dither offsets for each observation ((DithX, DithY) columns in .pointing file)
+    point_error_list = [(-0.20, -1.17), (-0.12, -1.10)]   #pix, list of measured pointing errors for each observation (ErrX, ErrY)
+
+elif mask_id == '1140':
+    pos_ang_list = [107.7002475 , 117.34017049]            #deg
+    base_offset_list =[(0,0), (0,0)]                       #arcsec
+    dith_offsets_list = [[(0,0)], [(0,0)]]                 #arcsec
+    point_error_list = [(0.12, 0.05), (0.07, -0.02)]      #pix
+
+elif mask_id == '1550':
+    pos_ang_list = [107.65929307, 117.31215657]            #deg
+    base_offset_list =[(0,0), (0,0)]                       #arcsec
+    dith_offsets_list = [[(0,0)], [(0,0)]]                 #arcsec
+    point_error_list = [(0.26, 0.22), (0.14, 0.01)]       #pix
+
+n_obs = len(pos_ang_list)
+
+# pos_ang = 115            # Position angle is angle of V3 axis rotated towards East
+# base_offset=(0.2,0)        # Pointing offsets [arcsec] (BaseX, BaseY) columns in .pointing file
+# dith_offsets = [(0,0)]   # list of nominal dither offsets [arcsec] (DithX, DithY) columns in .pointing file 
 
 # Information necessary to create pysynphot spectrum of star
 star_A_params = {
@@ -393,6 +462,7 @@ inst = webbpsf_ext.MIRI_ext(filter=filt, pupil_mask=pupil, image_mask=mask)
 # Set desired PSF size and oversampling
 inst.fov_pix = fov_pix
 inst.oversample = osamp
+pixscale = inst.pixelscale
 
 
 # Calculate PSF coefficients
@@ -421,31 +491,88 @@ are A1, A2, A3, and A4.
 '''
 
 # Observed and reference apertures
-# ap_obs = inst.aperturename
-ap_ref = f'MIRIM_MASK{mask_id}'
+ap_obs = inst.aperturename
+ap_ref = ap_obs
+ra_ref = star_A_params['RA_obj']
+dec_ref = star_A_params['Dec_obj']
 
-# Telescope pointing information
-tel_point = jwst_point(inst.aperturename, ap_ref, star_A_params['RA_obj'], star_A_params['Dec_obj'], 
-                       pos_ang=pos_ang, base_offset=base_offset, dith_offsets=dith_offsets,
-                       base_std=0, dith_std=0)
+obs=0
 
-# Get sci position of center in units of detector pixels
-# Elodie: gives the position of the mask center, in pixels 
-siaf_ap = tel_point.siaf_ap_obs
-x_cen, y_cen = siaf_ap.reference_point('sci')
 
-# Elodie: gives the full frame image size in pixel, inc. oversampling (432x432 with osamp=2)
-ny_pix, nx_pix = (siaf_ap.YSciSize, siaf_ap.XSciSize)
-shape_new = (ny_pix * osamp, nx_pix * osamp)
+for obs in range(n_obs):
+    print('###### Generating Observation {}/{} ######'.format(obs+1, n_obs))
+    # For each observation, define the telescope pointing. 
+    # This accounts for telescope V3 axis angle, nominal offset, nominal dither offsets, and measured pointing error.
+    
+    # NOTE: the pointing errors are implemented as an (X,Y) dither offset. 
+    # This is done rather crudely in the pixel to arcsec conversion, compared to 
+    # using the SIAF system in the rest of the code.
+    # TODO: improve on the implementation of the poiting error.
 
-print(f"Reference aperture: {tel_point.siaf_ap_ref.AperName}")
-print(f"  Nominal RA, Dec = ({tel_point.ra_ref:.6f}, {tel_point.dec_ref:.6f})")
-print(f"Observed aperture: {tel_point.siaf_ap_obs.AperName}")
-print(f"  Nominal RA, Dec = ({tel_point.ra_obs:.6f}, {tel_point.dec_obs:.6f})")
 
-print("Relative offsets in 'idl' for each dither position (incl. pointing errors)")
-for i, offset in enumerate(tel_point.position_offsets_act):
-    print(f"  Position {i}: ({offset[0]:.4f}, {offset[1]:.4f}) arcsec")
+    pos_ang = pos_ang_list[obs]
+    base_offset = base_offset_list[obs]
+    point_error = point_error_list[obs]
+    dith_offsets_mod = [(dith[0] + point_error[0]*pixscale, dith[1] + point_error[1]*pixscale)  
+                        for dith in dith_offsets_list[obs]]
+    
+    print('     Telescope orientation: {:.3f} deg'.format(pos_ang))
+    print('     Scene nominal offet: ({:.3f}, {:.3f}) arcsec'.format(base_offset[0], base_offset[1]))
+    
+    
+    # Telescope pointing information
+    tel_point = jwst_point(ap_obs, ap_ref,ra_ref, dec_ref, 
+                           pos_ang=pos_ang, base_offset=base_offset, dith_offsets=dith_offsets_mod,
+                           base_std=0, dith_std=0)
+    
+    # Get sci position of center in units of detector pixels
+    # Elodie: gives the position of the mask center, in pixels 
+    siaf_ap = tel_point.siaf_ap_obs
+    # x_cen, y_cen = siaf_ap.reference_point('sci')
+    
+    # Elodie: gives the full frame image size in pixel, inc. oversampling (432x432 with osamp=2)
+    ny_pix, nx_pix = (siaf_ap.YSciSize, siaf_ap.XSciSize)
+    shape_new = (ny_pix * osamp, nx_pix * osamp)
+    
+    print(f"Reference aperture: {tel_point.siaf_ap_ref.AperName}")
+    print(f"  Nominal RA, Dec = ({tel_point.ra_ref:.6f}, {tel_point.dec_ref:.6f})")
+    # print(f"Observed aperture: {tel_point.siaf_ap_obs.AperName}")
+    # print(f"  Nominal RA, Dec = ({tel_point.ra_obs:.6f}, {tel_point.dec_obs:.6f})")
+    
+    print("Relative offsets in 'idl' for each dither position (incl. pointing errors)")
+    for i, offset in enumerate(tel_point.position_offsets_act):
+        print(f"  Position {i}: ({offset[0]:.4f}, {offset[1]:.4f}) arcsec")
+        
+        
+        
+    # Generate the stars PSFs
+    scene_image_obs = np.zeros(shape_new)
+    if star_A_Q:
+        psf_star_A = generate_star_psf(star_A_params, tel_point, inst, shape_new)
+        scene_image_obs += psf_star_A
+    if star_B_Q:
+        psf_star_B = generate_star_psf(star_B_params, tel_point, inst, shape_new)
+        scene_image_obs += psf_star_B
+    if star_C_Q:
+        psf_star_C = generate_star_psf(star_C_params, tel_point, inst, shape_new)
+        scene_image_obs += psf_star_C
+
+    
+    # Print the results
+    if star_A_Q or star_B_Q or star_C_Q:
+        fig, ax = plt.subplots(1,1)
+        fig.suptitle('Oversampled image stars '+filt)
+        # extent = 0.5 * np.array([-1,1,-1,1]) * inst.fov_pix * inst.pixelscale
+        ax.imshow(scene_image_obs, vmin=-0.5,vmax=1) #, extent=extent, cmap='magma',
+        # ax.set_xlabel('Arcsec')
+        # ax.set_ylabel('Arcsec')
+        # ax.tick_params(axis='both', color='white', which='both')
+        # for k in ax.spines.keys():
+        #     ax.spines[k].set_color('white')
+        # ax.xaxis.get_major_locator().set_params(nbins=9, steps=[1, 2, 5, 10])
+        # ax.yaxis.get_major_locator().set_params(nbins=9, steps=[1, 2, 5, 10])
+        fig.tight_layout()
+        plt.show()
     
     
 #%% Add central source
@@ -456,91 +583,91 @@ as well as RA and Dec.
 Then Computes the PSF, including any offset/dither, using the coefficients.
 It includes geometric distortions based on SIAF info. 
 '''
-# Create stellar spectrum and add to dictionary
-sp_star = make_spec(**star_A_params)
-star_A_params['sp'] = sp_star
+# # Create stellar spectrum and add to dictionary
+# sp_star = make_spec(**star_A_params)
+# star_A_params['sp'] = sp_star
   
-if star_A_Q:
+# if star_A_Q:
   
-    # Get `sci` coord positions
-    coord_obj = (star_A_params['RA_obj'], star_A_params['Dec_obj'])
-    xsci, ysci = tel_point.radec_to_frame(coord_obj, frame_out='sci')
+#     # Get `sci` coord positions
+#     coord_obj = (star_A_params['RA_obj'], star_A_params['Dec_obj'])
+#     xsci, ysci = tel_point.radec_to_frame(coord_obj, frame_out='sci')
     
-    # Create oversampled PSF
-    hdul = inst.calc_psf_from_coeff(sp=sp_star, coord_vals=(xsci,ysci), coord_frame='sci')
+#     # Create oversampled PSF
+#     hdul = inst.calc_psf_from_coeff(sp=sp_star, coord_vals=(xsci,ysci), coord_frame='sci')
 
     
-    # Get the shifts from center and oversampled pixel shifts
-    xsci_off, ysci_off = (xsci-x_cen, ysci-y_cen)
-    delyx = (ysci_off * osamp, xsci_off * osamp)
-    print("Image shifts (oversampled pixels):", delyx) #xsci_off_over, ysci_off_over)
+#     # Get the shifts from center and oversampled pixel shifts
+#     xsci_off, ysci_off = (xsci-x_cen, ysci-y_cen)
+#     delyx = (ysci_off * osamp, xsci_off * osamp)
+#     print("Image shifts (oversampled pixels):", delyx) #xsci_off_over, ysci_off_over)
     
-    # Expand PSF to full frame and offset to proper position
-    image_full = pad_or_cut_to_size(hdul[0].data, shape_new, offset_vals=delyx)
-    print('Size image (oversampled): {}'.format(image_full.shape))
+#     # Expand PSF to full frame and offset to proper position
+#     image_full = pad_or_cut_to_size(hdul[0].data, shape_new, offset_vals=delyx)
+#     print('Size image (oversampled): {}'.format(image_full.shape))
     
-    # fig, ax = plt.subplots(1,1)
-    # ax.imshow(image_full, vmin=-0.5,vmax=1)
+#     # fig, ax = plt.subplots(1,1)
+#     # ax.imshow(image_full, vmin=-0.5,vmax=1)
     
-    # Make new HDUList of target (just central source so far)
-    hdul_full = fits.HDUList(fits.PrimaryHDU(data=image_full, header=hdul[0].header))
+#     # Make new HDUList of target (just central source so far)
+#     hdul_full = fits.HDUList(fits.PrimaryHDU(data=image_full, header=hdul[0].header))
     
 
 #%% Add the stellar companions
 
-if star_B_Q:
-    sp_star_B = make_spec(**star_B_params)
-    star_B_params['sp'] = sp_star_B
+# if star_B_Q:
+#     sp_star_B = make_spec(**star_B_params)
+#     star_B_params['sp'] = sp_star_B
     
-    coord_star_B = (star_B_params['RA_obj'], star_B_params['Dec_obj'])
-    xstar_B, ystar_B = tel_point.radec_to_frame(coord_star_B, frame_out='sci')
-    hdul_B = inst.calc_psf_from_coeff(sp=sp_star_B, coord_vals=(xstar_B, ystar_B), coord_frame='sci')
+#     coord_star_B = (star_B_params['RA_obj'], star_B_params['Dec_obj'])
+#     xstar_B, ystar_B = tel_point.radec_to_frame(coord_star_B, frame_out='sci')
+#     hdul_B = inst.calc_psf_from_coeff(sp=sp_star_B, coord_vals=(xstar_B, ystar_B), coord_frame='sci')
     
-    xstar_B_off, ystar_B_off = (xstar_B-x_cen, ystar_B-y_cen)
-    delyx_B = (ystar_B_off * osamp, xstar_B_off * osamp)
+#     xstar_B_off, ystar_B_off = (xstar_B-x_cen, ystar_B-y_cen)
+#     delyx_B = (ystar_B_off * osamp, xstar_B_off * osamp)
     
-    image_full_B = pad_or_cut_to_size(hdul_B[0].data, shape_new, offset_vals=delyx_B)
+#     image_full_B = pad_or_cut_to_size(hdul_B[0].data, shape_new, offset_vals=delyx_B)
     
-    if star_A_Q: 
-        hdul_full[0].data += image_full_B
-    else:
-        hdul_full = fits.HDUList(fits.PrimaryHDU(data=image_full_B, header=hdul_B[0].header))
+#     if star_A_Q: 
+#         hdul_full[0].data += image_full_B
+#     else:
+#         hdul_full = fits.HDUList(fits.PrimaryHDU(data=image_full_B, header=hdul_B[0].header))
 
 
-if star_C_Q:
-    sp_star_C = make_spec(**star_C_params)
-    star_C_params['sp'] = sp_star_C
+# if star_C_Q:
+#     sp_star_C = make_spec(**star_C_params)
+#     star_C_params['sp'] = sp_star_C
     
-    coord_star_C = (star_C_params['RA_obj'], star_C_params['Dec_obj'])
-    xstar_C, ystar_C = tel_point.radec_to_frame(coord_star_C, frame_out='sci')
-    hdul_C = inst.calc_psf_from_coeff(sp=sp_star_C, coord_vals=(xstar_C, ystar_C), coord_frame='sci')
+#     coord_star_C = (star_C_params['RA_obj'], star_C_params['Dec_obj'])
+#     xstar_C, ystar_C = tel_point.radec_to_frame(coord_star_C, frame_out='sci')
+#     hdul_C = inst.calc_psf_from_coeff(sp=sp_star_C, coord_vals=(xstar_C, ystar_C), coord_frame='sci')
     
-    xstar_C_off, ystar_C_off = (xstar_C-x_cen, ystar_C-y_cen)
-    delyx_C = (ystar_C_off * osamp, xstar_C_off * osamp)
+#     xstar_C_off, ystar_C_off = (xstar_C-x_cen, ystar_C-y_cen)
+#     delyx_C = (ystar_C_off * osamp, xstar_C_off * osamp)
     
-    image_full_C = pad_or_cut_to_size(hdul_C[0].data, shape_new, offset_vals=delyx_C)
+#     image_full_C = pad_or_cut_to_size(hdul_C[0].data, shape_new, offset_vals=delyx_C)
     
-    if star_A_Q or star_B_Q: 
-        hdul_full[0].data += image_full_C
-    else:
-        hdul_full = fits.HDUList(fits.PrimaryHDU(data=image_full_C, header=hdul_C[0].header))
+#     if star_A_Q or star_B_Q: 
+#         hdul_full[0].data += image_full_C
+#     else:
+#         hdul_full = fits.HDUList(fits.PrimaryHDU(data=image_full_C, header=hdul_C[0].header))
     
 
-# Print the results
-if star_A_Q or star_B_Q or star_C_Q:
-    fig, ax = plt.subplots(1,1)
-    fig.suptitle('Oversampled image stars '+filt)
-    # extent = 0.5 * np.array([-1,1,-1,1]) * inst.fov_pix * inst.pixelscale
-    ax.imshow(hdul_full[0].data, vmin=-0.5,vmax=1) #, extent=extent, cmap='magma',
-    # ax.set_xlabel('Arcsec')
-    # ax.set_ylabel('Arcsec')
-    # ax.tick_params(axis='both', color='white', which='both')
-    # for k in ax.spines.keys():
-    #     ax.spines[k].set_color('white')
-    # ax.xaxis.get_major_locator().set_params(nbins=9, steps=[1, 2, 5, 10])
-    # ax.yaxis.get_major_locator().set_params(nbins=9, steps=[1, 2, 5, 10])
-    fig.tight_layout()
-    plt.show()
+# # Print the results
+# if star_A_Q or star_B_Q or star_C_Q:
+#     fig, ax = plt.subplots(1,1)
+#     fig.suptitle('Oversampled image stars '+filt)
+#     # extent = 0.5 * np.array([-1,1,-1,1]) * inst.fov_pix * inst.pixelscale
+#     ax.imshow(hdul_full[0].data, vmin=-0.5,vmax=1) #, extent=extent, cmap='magma',
+#     # ax.set_xlabel('Arcsec')
+#     # ax.set_ylabel('Arcsec')
+#     # ax.tick_params(axis='both', color='white', which='both')
+#     # for k in ax.spines.keys():
+#     #     ax.spines[k].set_color('white')
+#     # ax.xaxis.get_major_locator().set_params(nbins=9, steps=[1, 2, 5, 10])
+#     # ax.yaxis.get_major_locator().set_params(nbins=9, steps=[1, 2, 5, 10])
+#     fig.tight_layout()
+#     plt.show()
 
 #%% Convolve extended disk image
 '''
@@ -558,14 +685,14 @@ Once in the appropriate 'idl' system
 apname = inst.psf_coeff_header['APERNAME']
 siaf_ap = inst.siaf[apname]
 
-field_rot = 0 if inst._rotation is None else inst._rotation
-
+# Mask Offset grid positions in arcsec
 xyoff_half = 10**(np.linspace(-2,1,10))
 xoff = yoff = np.concatenate([-1*xyoff_half[::-1],[0],xyoff_half])
-
-# Mask Offset grid positions in arcsec
 xgrid_off, ygrid_off = np.meshgrid(xoff, yoff)
 xgrid_off, ygrid_off = xgrid_off.flatten(), ygrid_off.flatten()
+
+# Rotation of 5deg of the coronagraphic mask
+field_rot = 0 if inst._rotation is None else inst._rotation
 
 # Science positions in detector pixels
 xoff_sci_asec, yoff_sci_asec = coords.xy_rot(-1*xgrid_off, -1*ygrid_off, -1*field_rot)
