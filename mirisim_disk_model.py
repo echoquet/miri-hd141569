@@ -138,48 +138,25 @@ def generate_star_psf(star_params, tel_point, inst, shape_new):
 
 
 
-def quick_ref_psf(idl_coord, inst, out_shape, sp=None):
-    """
-    Create a quick reference PSF for subtraction of the science target.
-    """
-    
-    # Observed SIAF aperture
-    siaf_ap = tel_point.siaf_ap_obs
-    
-    # Location of observation
-    xidl, yidl = idl_coord
-    
-    # Get offset in SCI pixels
-    xsci_off, ysci_off = np.array(siaf_ap.convert(xidl, yidl, 'idl', 'sci')) - \
-                         np.array(siaf_ap.reference_point('sci'))
-    
-    # Get oversampled pixels offests
-    osamp = inst.oversample
-    xsci_off_over, ysci_off_over = np.array([xsci_off, ysci_off]) * osamp
-    yx_offset = (ysci_off_over, xsci_off_over)
-    
-    # Create PSF
-    prev_log = webbpsf_ext.conf.logging_level
-    setup_logging('WARN', verbose=False)
-    hdul_psf_ref = inst.calc_psf_from_coeff(sp=sp, coord_vals=(xidl, yidl), coord_frame='idl')
-    setup_logging(prev_log, verbose=False)
-
-    im_psf = pad_or_cut_to_size(hdul_psf_ref[0].data, out_shape, offset_vals=yx_offset)
-
-    return im_psf
-
 
 ## time to make the disk mode
 ## it's fine to use the same star & PSF grids if we want several disk models
 ## of course the disk model needs updating
-def add_disk_into_model(hdul_full, disk_params):
-
+def add_disk_into_model(disk_params, hdul_psfs, tel_point, inst, shape_new, star_params):
+    '''
+    Properly including extended objects is a little more complicated than for point sources. 
+    First, we need properly format the input model to a pixel binning and flux units 
+    appropriate for the simulations (ie., pixels should be equal to oversampled PSFs with 
+    flux units of counts/sec). Then, the image needs to be rotated relative to the 'idl' 
+    coordinate plane and subsequently shifted for any pointing offsets. 
+    '''
     ##########################  Disk Model Image
     # Open model and rebin to PSF sampling
     # Scale to instrument wavelength assuming grey scattering function
     # Converts to phot/sec/lambda
-    t0_disk =time()
-    hdul_disk_model = image_manip.make_disk_image(inst, disk_params, sp_star=star_A_params['sp'])
+    
+    sp_star = make_spec(**star_params)
+    hdul_disk_model = image_manip.make_disk_image(inst, disk_params, sp_star=sp_star)
     print('Input disk model shape: {}'.format(hdul_disk_model[0].data.shape))
 
     fig1, ax1 = plt.subplots(1,1)
@@ -216,6 +193,9 @@ def add_disk_into_model(hdul_full, disk_params):
      
     # If the image is too large, then this process will eat up much of your computer's RAM
     # So, crop image to more reasonable size (20% oversized)
+    siaf_ap = tel_point.siaf_ap_obs
+    osamp = inst.oversample
+    
     xysize = int(1.2 * np.max([siaf_ap.XSciSize,siaf_ap.YSciSize]) * osamp)
     xy_add = osamp - np.mod(xysize, osamp)
     xysize += xy_add
@@ -249,70 +229,101 @@ def add_disk_into_model(hdul_full, disk_params):
     ax1.imshow(im_conv, vmin=0,vmax=20)
     fig1.tight_layout()
     plt.show()
-
-
-    # Add cropped image to final oversampled image
-    im_conv = pad_or_cut_to_size(im_conv, shape_new)
-    if star_A_Q or star_B_Q or star_C_Q:
-        hdul_full[0].data += im_conv
-    else:
-        hdul_full = fits.HDUList(fits.PrimaryHDU(data=im_conv, header=hdul_disk_model_sci[0].header))
-    print('Resized Convolved disk shape: {}'.format(im_conv.shape)) #432x432
+    
+    # Crop or Expand the PSF to full frame and offset to proper position
+    # TODO: Ask Jarron if this shouldn't also need the offset_vals as for the stars
+    im_conv_resized = pad_or_cut_to_size(im_conv, shape_new)
+    
+    return im_conv_resized
 
 
 
-    # Rebin science data to detector pixels
-    im_sci = image_manip.frebin(hdul_full[0].data, scale=1/osamp)
-    print('Detector sampled final image shape: {}'.format(im_sci.shape)) #216x216
+def quick_ref_psf(idl_coord, inst, out_shape, star_params=None):
+    """
+    Create a quick reference PSF for subtraction of the science target.
+    """
+    
+    # Observed SIAF aperture
+    siaf_ap = tel_point.siaf_ap_obs
+    
+    # Location of observation
+    xidl, yidl = idl_coord
+    
+    # Get offset in SCI pixels
+    xsci_off, ysci_off = np.array(siaf_ap.convert(xidl, yidl, 'idl', 'sci')) - \
+                         np.array(siaf_ap.reference_point('sci'))
+    
+    # Get oversampled pixels offests
+    osamp = inst.oversample
+    xsci_off_over, ysci_off_over = np.array([xsci_off, ysci_off]) * osamp
+    yx_offset = (ysci_off_over, xsci_off_over)
+    
+    # Create PSF
+    prev_log = webbpsf_ext.conf.logging_level
+    setup_logging('WARN', verbose=False)
+    sp_star = make_spec(**star_params)
+    hdul_psf_ref = inst.calc_psf_from_coeff(sp=sp_star, coord_vals=(xidl, yidl), coord_frame='idl')
+    setup_logging(prev_log, verbose=False)
 
-    t1_disk =time()
+    im_psf = pad_or_cut_to_size(hdul_psf_ref[0].data, out_shape, offset_vals=yx_offset)
 
-    print('######################')
-    print('Disk computation time: {} s'.format(t1_disk-t0_disk))
-
-
-    # Subtract a reference PSF from the science data
-    if psf_sub:
-        coord_vals = tel_point.position_offsets_act[0]
-        im_psf = quick_ref_psf(coord_vals, inst, hdul_full[0].data.shape, sp=sp_star)
-        im_ref = image_manip.frebin(im_psf, scale=1/osamp)
-        imdisk = im_sci - im_ref
-    else:
-        imdisk = im_sci
-
-    # De-rotate to sky orientation
-    imrot = image_manip.rotate_offset(imdisk, rotate_to_idl, reshape=False, cval=np.nan)
+    return im_psf
 
 
-    # Plot results
-    xsize_asec = siaf_ap.XSciSize * siaf_ap.XSciScale
-    ysize_asec = siaf_ap.YSciSize * siaf_ap.YSciScale
-    extent = [-1*xsize_asec/2, xsize_asec/2, -1*ysize_asec/2, ysize_asec/2]
-    fig, axes = plt.subplots(2,2, figsize=(8,8), dpi=300)
 
-    plmax = 0.05 * imdisk.max()
-    axes[0,0].imshow(imdisk, extent=extent, vmin=-0.1 * plmax, vmax=plmax)
-    axes[0,1].imshow(imrot, extent=extent, vmin=-0.1 * plmax, vmax=plmax)
-    axes[0,0].set_title('Raw Image (lin)')
-    axes[0,1].set_title("De-Rotated (lin)")
 
-    plmax = imdisk.max()
-    axes[1,0].imshow(imdisk, extent=extent, norm=LogNorm(vmin=plmax * 1e-5, vmax=plmax))
-    axes[1,1].imshow(imrot, extent=extent, norm=LogNorm(vmin=plmax * 1e-5, vmax=plmax))
-    axes[1,0].set_title('Raw Image (log)')
-    axes[1,1].set_title("De-Rotated (log)")
+def resize_list_limits(len1, len2, cent1=None):
+    """
+    Computes the inner and outer indices to resize a list to a given length.
+    The returned indices ensure that the boudaries of the list are not exceeded.
+    If the list is croped, the returned indices are centered on the input list center.
 
-    for i in range(2):
-        for j in range(2):
-            axes[i,j].set_xlabel('XSci (arcsec)')
-            axes[i,j].set_ylabel('YSci (arcsec)')
-        plotAxes(axes[i,0], angle=-1*siaf_ap.V3SciYAngle)
-        plotAxes(axes[i,1], position=(0.95,0.35), label1='E', label2='N')
+    Parameters
+    ----------
+    len1 : INT
+        Length of the input list.
+    len2 : INT
+        Length of the resized list.
 
-    fig.suptitle(f"HD 141569 ({filt})", fontsize=14)
-    fig.tight_layout()
+    Returns
+    -------
+    inner, outer: indices in the input list to resize it.
 
-    plt.show()
+    """
+    if cent1 is None:
+        cent1 = len1//2
+    inner = np.max([cent1 - len2//2, 0])
+    outer = np.min([cent1 + len2//2 + len2%2, len1])
+    return inner, outer
+    
+    
+def resize(cube1, dim2, cent=[None,None]):
+    """ Resize a cube of images of arbitrary dimensions: crop it or adds zeros on the edges.
+    
+    Parameters
+    ----------
+    cube1 : ND numpy array wherre the last two dimensions correspond to the images size.
+    dim2 : list of two elements with the new shape of the array.
+        
+    Returns
+    -------
+    cube2 : ND numpy array with the last two dimensions resized to the requested shape.
+    
+    """  
+    dims = np.array(cube1.shape)
+    dim1 = dims[-2:]
+    x1i, x1f = resize_list_limits(dim1[0], dim2[0], cent1=cent[0])
+    y1i, y1f = resize_list_limits(dim1[1], dim2[1], cent1=cent[1])
+    
+    cube2 = np.zeros(np.concatenate((dims[:-2], dim2)))
+    x2i, x2f = resize_list_limits(dim2[0], x1f-x1i)
+    y2i, y2f = resize_list_limits(dim2[1], y1f-y1i)
+    
+    cube2[..., x2i:x2f, y2i:y2f] = cube1[..., x1i:x1f, y1i:y1f]
+    
+    return cube2
+
+
 
 
     #%% Figurre Jarron
@@ -373,41 +384,42 @@ def add_disk_into_model(hdul_full, disk_params):
 
 
 
-    #%% Save image to FITS file
-    hdu_diff = fits.PrimaryHDU(imdisk)
+    # #%% Save image to FITS file
+    # hdu_diff = fits.PrimaryHDU(imdisk)
 
-    copy_keys = [
-        'PIXELSCL', 'DISTANCE', 
-        'INSTRUME', 'FILTER', 'PUPIL', 'CORONMSK',
-        'APERNAME', 'MODULE', 'CHANNEL',
-        'DET_NAME', 'DET_X', 'DET_Y', 'DET_V2', 'DET_V3'
-    ]
+    # copy_keys = [
+    #     'PIXELSCL', 'DISTANCE', 
+    #     'INSTRUME', 'FILTER', 'PUPIL', 'CORONMSK',
+    #     'APERNAME', 'MODULE', 'CHANNEL',
+    #     'DET_NAME', 'DET_X', 'DET_Y', 'DET_V2', 'DET_V3'
+    # ]
 
-    hdr = hdu_diff.header
-    for head_temp in (inst.psf_coeff_header, hdul_out[0].header):
-        for key in copy_keys:
-            try:
-                hdr[key] = (head_temp[key], head_temp.comments[key])
-            except (AttributeError, KeyError):
-                pass
+    # hdr = hdu_diff.header
+    # for head_temp in (inst.psf_coeff_header, hdul_out[0].header):
+    #     for key in copy_keys:
+    #         try:
+    #             hdr[key] = (head_temp[key], head_temp.comments[key])
+    #         except (AttributeError, KeyError):
+    #             pass
 
-    hdr['PIXELSCL'] = inst.pixelscale
+    # hdr['PIXELSCL'] = inst.pixelscale
 
-    name = star_A_params['name']
+    # name = star_A_params['name']
 
-    outfile = f'HD141569_models/{name}_{inst.aperturename}_{inst.filter}.fits'.replace(' ','')
-    hdu_diff.writeto(outfile, overwrite=True)
+    # outfile = f'HD141569_models/{name}_{inst.aperturename}_{inst.filter}.fits'.replace(' ','')
+    # hdu_diff.writeto(outfile, overwrite=True)
 
 
-    print('end')
+    # print('end')
 
 
 
 #%% Simulation parameters
 
-star_A_Q = True
-star_B_Q = False
-star_C_Q = False
+star_A_Q = False
+star_B_Q = True
+star_C_Q = True
+disk_Q = True
 psf_sub = False
 export_Q = False
 
@@ -423,7 +435,7 @@ pupil = 'MASKFQPM'
 # MIRI 4QPM: 24" x24" at 0.11 pixels, so 219x219 pixels
 # MIRISim synthetic datasets: 224 x 288
 fov_pix = 100 #256
-osamp = 3
+osamp = 2
 
 
 # Observations structure and parameters
@@ -488,6 +500,17 @@ if filt == 'F1550C':
     star_A_params['flux'] = 30.71  
     star_B_params['flux'] = 18.49 
     star_C_params['flux'] = 23.64 
+    
+
+disk_params = {
+    'file': "/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled/HD141569_Model_Pantin_F1065C.fits",
+    # 'file': "./radmc_model/images/image_MIRI_FQPM_{}_{}.fits".format(target,10.575),
+    'pixscale': 0.027491, 
+    'wavelength': 10.65,
+    'units': 'Jy/pixel',
+    'dist' : 116,
+    'cen_star' : True,
+}
 
 #%% Create the PSF structure
 
@@ -515,7 +538,7 @@ inst.gen_wfemask_coeff()
 t0 = time()
 hdul_psfs = generate_grd_psf(inst)
 t1 = time()
-print('PSF Grid Calculation time: {} s'.format(t1-t0))
+print('\nPSF Grid Calculation time: {} s'.format(t1-t0))
 print('Number of PSFs: {}'.format(len(hdul_psfs)))
 print('PSF shape: {}'.format(hdul_psfs[0].data.shape))
 
@@ -555,15 +578,24 @@ are A1, A2, A3, and A4.
 
 # Observed and reference apertures
 ap_obs = inst.aperturename
-ap_ref = ap_obs
+ap_ref = ap_obs   # f'MIRIM_MASK{mask_id}'
 ra_ref = star_A_params['RA_obj']
 dec_ref = star_A_params['Dec_obj']
 
-obs=0
+siaf_obs = inst.siaf[ap_obs]
+ny_pix, nx_pix = (siaf_obs.YSciSize, siaf_obs.XSciSize)
+shape_new = (ny_pix * osamp, nx_pix * osamp)
 
+# book keeping arrays:
+obs_image_list = np.zeros((n_obs, ny_pix, nx_pix))
+obs_image_sub_list = np.zeros((n_obs, ny_pix, nx_pix))
+obs_image_derot_list = np.zeros((n_obs, ny_pix, nx_pix))
 
 for obs in range(n_obs):
     print('###### Generating Observation {}/{} ######'.format(obs+1, n_obs))
+    
+    
+    print('--- Setting the pointing parameters:')
     # For each observation, define the telescope pointing. 
     # This accounts for telescope V3 axis angle, nominal offset, nominal dither offsets, and measured pointing error.
     
@@ -572,17 +604,12 @@ for obs in range(n_obs):
     # using the SIAF system in the rest of the code.
     # TODO: improve on the implementation of the poiting error.
 
-
     pos_ang = pos_ang_list[obs]
     base_offset = base_offset_list[obs]
     point_error = point_error_list[obs]
     dith_offsets_mod = [(dith[0] + point_error[0]*pixscale, dith[1] + point_error[1]*pixscale)  
                         for dith in dith_offsets_list[obs]]
-    
-    print('     Telescope orientation: {:.3f} deg'.format(pos_ang))
-    print('     Scene nominal offet: ({:.3f}, {:.3f}) arcsec'.format(base_offset[0], base_offset[1]))
-    
-    
+ 
     # Telescope pointing information
     tel_point = jwst_point(ap_obs, ap_ref,ra_ref, dec_ref, 
                            pos_ang=pos_ang, base_offset=base_offset, dith_offsets=dith_offsets_mod,
@@ -590,43 +617,46 @@ for obs in range(n_obs):
     
     # Get sci position of center in units of detector pixels
     # Elodie: gives the position of the mask center, in pixels 
-    siaf_ap = tel_point.siaf_ap_obs
-    # x_cen, y_cen = siaf_ap.reference_point('sci')
+    # siaf_ap = tel_point.siaf_ap_obs
+    # # x_cen, y_cen = siaf_ap.reference_point('sci')
     
-    # Elodie: gives the full frame image size in pixel, inc. oversampling (432x432 with osamp=2)
-    ny_pix, nx_pix = (siaf_ap.YSciSize, siaf_ap.XSciSize)
-    shape_new = (ny_pix * osamp, nx_pix * osamp)
+    # # Elodie: gives the full frame image size in pixel, inc. oversampling (432x432 with osamp=2)
+    # ny_pix, nx_pix = (siaf_ap.YSciSize, siaf_ap.XSciSize)
+    # shape_new = (ny_pix * osamp, nx_pix * osamp)
     
-    print(f"Reference aperture: {tel_point.siaf_ap_ref.AperName}")
-    print(f"  Nominal RA, Dec = ({tel_point.ra_ref:.6f}, {tel_point.dec_ref:.6f})")
-    # print(f"Observed aperture: {tel_point.siaf_ap_obs.AperName}")
-    # print(f"  Nominal RA, Dec = ({tel_point.ra_obs:.6f}, {tel_point.dec_obs:.6f})")
-    
-    print("Relative offsets in 'idl' for each dither position (incl. pointing errors)")
+    print('     Reference aperture: {}'.format(tel_point.siaf_ap_ref.AperName))
+    print('     Telescope orientation: {:.3f} deg'.format(pos_ang))
+    print('     Nominal RA, Dec = ({:.6f}, {:.6f})'.format(tel_point.ra_ref, tel_point.dec_ref))     
+    print('     Scene nominal offet: ({:.3f}, {:.3f}) arcsec'.format(base_offset[0], base_offset[1]))   
+    print('     Relative offsets for each dither position (incl. pointing errors)')
     for i, offset in enumerate(tel_point.position_offsets_act):
-        print(f"  Position {i}: ({offset[0]:.4f}, {offset[1]:.4f}) arcsec")
+        print('  Position {}: ({:.4f}, {:.4f}) arcsec'.format(i, offset[0],offset[1]))
         
         
-        
+    
+    print('--- Creating the instrument image with stars and disk:')
     # Generate the stars PSFs
-    scene_image_obs = np.zeros(shape_new)
+    obs_image_over = np.zeros(shape_new)
     if star_A_Q:
+        print('     Creating Star A image')
         psf_star_A = generate_star_psf(star_A_params, tel_point, inst, shape_new)
-        scene_image_obs += psf_star_A
+        obs_image_over += psf_star_A
     if star_B_Q:
+        print('     Creating Star B image')
         psf_star_B = generate_star_psf(star_B_params, tel_point, inst, shape_new)
-        scene_image_obs += psf_star_B
+        obs_image_over += psf_star_B
     if star_C_Q:
+        print('     Creating Star C image')
         psf_star_C = generate_star_psf(star_C_params, tel_point, inst, shape_new)
-        scene_image_obs += psf_star_C
+        obs_image_over += psf_star_C
 
     
-    # Print the results
-    if star_A_Q or star_B_Q or star_C_Q:
+    # Display the simulated stars
+    if display_all_Q and (star_A_Q or star_B_Q or star_C_Q):
         fig, ax = plt.subplots(1,1)
         fig.suptitle('Oversampled image stars '+filt)
         # extent = 0.5 * np.array([-1,1,-1,1]) * inst.fov_pix * inst.pixelscale
-        ax.imshow(scene_image_obs, vmin=-0.5,vmax=1) #, extent=extent, cmap='magma',
+        ax.imshow(obs_image_over, vmin=-0.5,vmax=1) #, extent=extent, cmap='magma',
         # ax.set_xlabel('Arcsec')
         # ax.set_ylabel('Arcsec')
         # ax.tick_params(axis='both', color='white', which='both')
@@ -637,6 +667,116 @@ for obs in range(n_obs):
         fig.tight_layout()
         plt.show()
     
+    
+    # Generate the disk image
+    if disk_Q:
+        print('     Creating Disk image')
+        disk_image = add_disk_into_model(disk_params, hdul_psfs, tel_point, inst, shape_new, star_params=star_A_params)
+        obs_image_over += disk_image
+    
+    # Display the total image
+    if display_all_Q :
+        fig, ax = plt.subplots(1,1)
+        fig.suptitle('Oversampled full image '+filt)
+        # extent = 0.5 * np.array([-1,1,-1,1]) * inst.fov_pix * inst.pixelscale
+        ax.imshow(obs_image_over, vmin=-0.5,vmax=1) #, extent=extent, cmap='magma',
+        # ax.set_xlabel('Arcsec')
+        # ax.set_ylabel('Arcsec')
+        # ax.tick_params(axis='both', color='white', which='both')
+        # for k in ax.spines.keys():
+        #     ax.spines[k].set_color('white')
+        # ax.xaxis.get_major_locator().set_params(nbins=9, steps=[1, 2, 5, 10])
+        # ax.yaxis.get_major_locator().set_params(nbins=9, steps=[1, 2, 5, 10])
+        fig.tight_layout()
+        plt.show()
+
+
+    # Rebin science data to detector pixels
+    obs_image = image_manip.frebin(obs_image_over, scale=1/osamp)
+    print('Detector sampled final image shape: {}'.format(obs_image.shape)) #216x216
+
+    # Subtract a reference PSF from the science data
+    if psf_sub:
+        print('--- Subtracting the central star:')
+        coord_vals = tel_point.position_offsets_act[0]
+        im_psf = quick_ref_psf(coord_vals, inst, obs_image.shape, star_params=star_A_params)
+        im_ref = image_manip.frebin(im_psf, scale=1/osamp)
+        obs_image_sub = obs_image - im_ref
+    else:
+        obs_image_sub = obs_image
+
+    # TODO: the derotation must be done about the star center, accounting for the pointing error
+    rotate_to_idl = -1*(tel_point.siaf_ap_obs.V3IdlYAngle + tel_point.pos_ang)
+    obs_image_derot = image_manip.rotate_offset(obs_image_sub, rotate_to_idl, reshape=False, cval=np.nan)
+    
+    obs_image_list[obs] = obs_image
+    obs_image_sub_list[obs] = obs_image_sub
+    obs_image_derot_list[obs] = obs_image_derot
+
+#%% Derotating and Combining the two rolls
+print('Generation of each observation complete!\n')
+if display_all_Q:
+    plmax = obs_image_sub_list.max()/10
+    fig, ax = plt.subplots(3, n_obs)
+    fig.suptitle('Roll images '+filt)
+    for obs in range(n_obs):
+        ax[0, obs].imshow(obs_image_list[obs], vmin=0,vmax=plmax) 
+        ax[1, obs].imshow(obs_image_sub_list[obs], vmin=0,vmax=plmax) 
+        ax[2, obs].imshow(obs_image_derot_list[obs], vmin=0,vmax=plmax) 
+    fig.tight_layout()
+    plt.show()
+
+
+print('###### Combining the dataset')
+# Finally getting the final combined image to compare with the real MIRI image
+cropsize = 101
+model_image_full = np.nanmean(obs_image_derot_list, axis=0)
+model_image = resize(model_image_full, [cropsize,cropsize]) #, cent=np.round(star_center_sci).astype(int)) 
+
+# vmin = 0.1 #median_val*0.8
+vmax = 700
+fig7, ax7 = plt.subplots(1,1,figsize=(8,6), dpi=130)
+im = ax7.imshow(model_image, norm=LogNorm(vmin=vmax/500, vmax=vmax))
+# im = ax7.imshow(combined_image, vmin=vmin_lin, vmax=vmax)
+ax7.set_title('COMBINED HD141569 MODEL '+filt)
+plt.tight_layout()
+cbar = fig7.colorbar(im, ax=ax7)
+cbar.ax.set_title('Units TBD$')
+plt.show()
+
+
+
+
+    # # Plot results
+    # xsize_asec = siaf_ap.XSciSize * siaf_ap.XSciScale
+    # ysize_asec = siaf_ap.YSciSize * siaf_ap.YSciScale
+    # extent = [-1*xsize_asec/2, xsize_asec/2, -1*ysize_asec/2, ysize_asec/2]
+    # fig, axes = plt.subplots(2,2, figsize=(8,8), dpi=300)
+
+    # plmax = 0.05 * imdisk.max()
+    # axes[0,0].imshow(imdisk, extent=extent, vmin=-0.1 * plmax, vmax=plmax)
+    # axes[0,1].imshow(imrot, extent=extent, vmin=-0.1 * plmax, vmax=plmax)
+    # axes[0,0].set_title('Raw Image (lin)')
+    # axes[0,1].set_title("De-Rotated (lin)")
+
+    # plmax = imdisk.max()
+    # axes[1,0].imshow(imdisk, extent=extent, norm=LogNorm(vmin=plmax * 1e-5, vmax=plmax))
+    # axes[1,1].imshow(imrot, extent=extent, norm=LogNorm(vmin=plmax * 1e-5, vmax=plmax))
+    # axes[1,0].set_title('Raw Image (log)')
+    # axes[1,1].set_title("De-Rotated (log)")
+
+    # for i in range(2):
+    #     for j in range(2):
+    #         axes[i,j].set_xlabel('XSci (arcsec)')
+    #         axes[i,j].set_ylabel('YSci (arcsec)')
+    #     plotAxes(axes[i,0], angle=-1*siaf_ap.V3SciYAngle)
+    #     plotAxes(axes[i,1], position=(0.95,0.35), label1='E', label2='N')
+
+    # fig.suptitle(f"HD 141569 ({filt})", fontsize=14)
+    # fig.tight_layout()
+
+    # plt.show()
+
     
 #%% Add central source
 # '''
@@ -733,27 +873,11 @@ for obs in range(n_obs):
 #     plt.show()
 
 #%% Convolve extended disk image
-'''
-Properly including extended objects is a little more complicated than for point sources. 
-First, we need properly format the input model to a pixel binning and flux units 
-appropriate for the simulations (ie., pixels should be equal to oversampled PSFs with 
-flux units of counts/sec). Then, the image needs to be rotated relative to the 'idl' 
-coordinate plane and subsequently shifted for any pointing offsets. 
-Once in the appropriate 'idl' system
-'''
 
 
 
 
-disk_params = {
-    # 'file': "/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled/HD141569_Model_Pantin_F1065C.fits",
-    'file': "./radmc_model/images/image_MIRI_FQPM_{}_{}.fits".format(target,10.575),
-    'pixscale': 0.027491, 
-    'wavelength': 10.65,
-    'units': 'Jy/pixel',
-    'dist' : 116,
-    'cen_star' : True,
-}
-add_disk_into_model(hdul_full.copy(),disk_params)
+
+# add_disk_into_model(hdul_full.copy(),disk_params)
 
 
