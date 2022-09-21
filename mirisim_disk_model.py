@@ -38,6 +38,40 @@ plt.rcParams["image.cmap"] = 'gist_heat'#'hot'#'copper'
 
 
 #%% Functions
+
+def generate_grd_psf(inst):
+    """
+    Generates a grid of PSF along the edges of the 4QPM mask, with a log density (denser close the edges)
+    This is needed to properly convolved extended objects.
+
+    """
+    # Create grid locations for array of PSFs to generate
+    apname = inst.psf_coeff_header['APERNAME']
+    siaf_ap = inst.siaf[apname]
+
+    # Mask Offset grid positions in arcsec
+    xyoff_half = 10**(np.linspace(-2,1,10))
+    xoff = yoff = np.concatenate([-1*xyoff_half[::-1],[0],xyoff_half])
+    xgrid_off, ygrid_off = np.meshgrid(xoff, yoff)
+    xgrid_off, ygrid_off = xgrid_off.flatten(), ygrid_off.flatten()
+
+    # Rotation of ~5deg of the coronagraphic mask
+    field_rot = 0 if inst._rotation is None else inst._rotation
+
+    # Science positions in detector pixels
+    xoff_sci_asec, yoff_sci_asec = coords.xy_rot(-1*xgrid_off, -1*ygrid_off, -1*field_rot)
+    xgrid = xoff_sci_asec / siaf_ap.XSciScale + siaf_ap.XSciRef
+    ygrid = yoff_sci_asec / siaf_ap.YSciScale + siaf_ap.YSciRef
+
+
+    # Now, create all PSFs, one for each (xgrid, ygrid) location
+    # Only need to do this once. Can be used for multiple dither positions.
+    hdul_psfs = inst.calc_psf_from_coeff(coord_vals=(xgrid, ygrid), coord_frame='sci', return_oversample=True)
+    
+    return hdul_psfs
+
+
+
 def make_spec(name=None, sptype=None, flux=None, flux_units=None, bp_ref=None, **kwargs):
     """
     Create pysynphot stellar spectrum from input dictionary properties.
@@ -173,7 +207,7 @@ def add_disk_into_model(hdul_full, disk_params):
     im_sci, xsci_im, ysci_im = image_manip.distort_image(hdul_out, ext=0, to_frame='sci', return_coords=True)
 
     # Distort image onto 'tel' (V2, V3) coordinate grid for plot illustration
-    im_tel, v2_im, v3_im = image_manip.distort_image(hdul_out, ext=0, to_frame='tel', return_coords=True)
+    # im_tel, v2_im, v3_im = image_manip.distort_image(hdul_out, ext=0, to_frame='tel', return_coords=True)
 
 
     '''This particular disk image is oversized, so we will need to crop the image after 
@@ -377,6 +411,8 @@ star_C_Q = False
 psf_sub = False
 export_Q = False
 
+display_all_Q = True
+
 # Mask information
 mask_id = '1140'
 filt = f'F{mask_id}C'
@@ -465,12 +501,39 @@ inst.oversample = osamp
 pixscale = inst.pixelscale
 
 
-# Calculate PSF coefficients
+# Calculate PSF coefficients, or import them if already computed.
+# Can take a while if need to be calculated
 inst.gen_psf_coeff()
 
 # Calculate position-dependent PSFs due to FQPM
 # Equivalent to generating a giant library to interpolate over
 inst.gen_wfemask_coeff()
+
+
+
+### Calculate the grid of PSFs for extended objects convolution
+t0 = time()
+hdul_psfs = generate_grd_psf(inst)
+t1 = time()
+print('PSF Grid Calculation time: {} s'.format(t1-t0))
+print('Number of PSFs: {}'.format(len(hdul_psfs)))
+print('PSF shape: {}'.format(hdul_psfs[0].data.shape))
+
+if display_all_Q:
+    psf_grid_summed = np.empty(hdul_psfs[0].data.shape)
+    for i in range(len(hdul_psfs)):
+        psf_grid_summed += hdul_psfs[i].data 
+    
+    fig1, ax1 = plt.subplots(1,1)
+    fig1.suptitle('PSF grid for disk')
+    # extent = 0.5 * np.array([-1,1,-1,1]) * inst.fov_pix * inst.pixelscale
+    ax1.imshow(psf_grid_summed/len(hdul_psfs) , norm=LogNorm(vmin=0.00001,vmax=0.001))
+    fig1.tight_layout()
+    plt.show()
+
+
+
+
 
 #%% Observation setup
 '''
@@ -576,13 +639,13 @@ for obs in range(n_obs):
     
     
 #%% Add central source
-'''
-Here we define the stellar atmosphere parameters for HD 141569, including spectral type, 
-optional values for (Teff, log_g, metallicity), normalization flux and bandpass, 
-as well as RA and Dec.
-Then Computes the PSF, including any offset/dither, using the coefficients.
-It includes geometric distortions based on SIAF info. 
-'''
+# '''
+# Here we define the stellar atmosphere parameters for HD 141569, including spectral type, 
+# optional values for (Teff, log_g, metallicity), normalization flux and bandpass, 
+# as well as RA and Dec.
+# Then Computes the PSF, including any offset/dither, using the coefficients.
+# It includes geometric distortions based on SIAF info. 
+# '''
 # # Create stellar spectrum and add to dictionary
 # sp_star = make_spec(**star_A_params)
 # star_A_params['sp'] = sp_star
@@ -678,47 +741,6 @@ flux units of counts/sec). Then, the image needs to be rotated relative to the '
 coordinate plane and subsequently shifted for any pointing offsets. 
 Once in the appropriate 'idl' system
 '''
-
-
-### PSF Grid
-# Create grid locations for array of PSFs to generate
-apname = inst.psf_coeff_header['APERNAME']
-siaf_ap = inst.siaf[apname]
-
-# Mask Offset grid positions in arcsec
-xyoff_half = 10**(np.linspace(-2,1,10))
-xoff = yoff = np.concatenate([-1*xyoff_half[::-1],[0],xyoff_half])
-xgrid_off, ygrid_off = np.meshgrid(xoff, yoff)
-xgrid_off, ygrid_off = xgrid_off.flatten(), ygrid_off.flatten()
-
-# Rotation of 5deg of the coronagraphic mask
-field_rot = 0 if inst._rotation is None else inst._rotation
-
-# Science positions in detector pixels
-xoff_sci_asec, yoff_sci_asec = coords.xy_rot(-1*xgrid_off, -1*ygrid_off, -1*field_rot)
-xgrid = xoff_sci_asec / siaf_ap.XSciScale + siaf_ap.XSciRef
-ygrid = yoff_sci_asec / siaf_ap.YSciScale + siaf_ap.YSciRef
-
-
-# Now, create all PSFs, one for each (xgrid, ygrid) location
-# Only need to do this once. Can be used for multiple dither positions.
-t0 = time()
-hdul_psfs = inst.calc_psf_from_coeff(coord_vals=(xgrid, ygrid), coord_frame='sci', return_oversample=True)
-t1 = time()
-print('PSF Grid Calculation time: {} s'.format(t1-t0))
-print('Number of PSFs: {}'.format(len(hdul_psfs)))
-print('PSF shape: {}'.format(hdul_psfs[0].data.shape))
-
-psf_grid_summed = np.empty(hdul_psfs[0].data.shape)
-for i in range(len(hdul_psfs)):
-    psf_grid_summed += hdul_psfs[i].data 
-
-fig1, ax1 = plt.subplots(1,1)
-fig1.suptitle('PSF grid for disk')
-# extent = 0.5 * np.array([-1,1,-1,1]) * inst.fov_pix * inst.pixelscale
-ax1.imshow(psf_grid_summed/len(hdul_psfs) , norm=LogNorm(vmin=0.00001,vmax=0.001))
-fig1.tight_layout()
-plt.show()
 
 
 
