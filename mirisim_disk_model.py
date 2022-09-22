@@ -37,7 +37,7 @@ plt.rcParams["image.cmap"] = 'gist_heat'#'hot'#'copper'
 
 #%% Functions
 
-def generate_grd_psf(inst):
+def generate_grid_psf(inst):
     """
     Generates a grid of PSF along the edges of the 4QPM mask, with a log density (denser close the edges)
     This is needed to properly convolved extended objects.
@@ -96,6 +96,7 @@ def generate_star_psf(star_params, tel_point, inst, shape_new):
     Then Computes the PSF, including any offset/dither, using the coefficients.
     It includes geometric distortions based on SIAF info. 
     shape_new is the oversampled shape.
+    The output image is shifted to place the central star at the center of the image despite dither/pointing error offsets.
     '''
 
     # Get `sci` position of center in units of detector pixels (center of mask)
@@ -121,7 +122,6 @@ def generate_star_psf(star_params, tel_point, inst, shape_new):
     
     # Crop or Expand the PSF to full frame and offset to proper position
     psf_image_full = pad_or_cut_to_size(psf_image, shape_new, offset_vals=star_off_oversamp)
-    # print('Size image (oversampled): {}'.format(image_full.shape))
     
   
     # Make new HDUList with the star
@@ -142,12 +142,20 @@ def add_disk_into_model(disk_params, hdul_psfs, tel_point, inst, shape_new, star
     appropriate for the simulations (ie., pixels should be equal to oversampled PSFs with 
     flux units of counts/sec). Then, the image needs to be rotated relative to the 'idl' 
     coordinate plane and subsequently shifted for any pointing offsets. 
-    '''
-    ##########################  Disk Model Image
-    # Open model and rebin to PSF sampling
-    # Scale to instrument wavelength assuming grey scattering function
-    # Converts to phot/sec/lambda
     
+    disk_params: input model must be a filename or HDUlist. 
+                 For model purpose, it is advised to not include the star and set cen_star=False
+    
+    '''
+    
+    siaf_ap = tel_point.siaf_ap_obs
+    x_cen, y_cen = siaf_ap.reference_point('sci')
+    osamp = inst.oversample
+    
+    
+    # Step 1: resample to the inst.sampling and rescale to inst.bandpass. Converts to photon/s. 
+    # Input must be a filename or HDUlist
+    # if cen_star==True, the flux of the brightest pixel (assuming it is the star) is saved and put in the center pixel (nx//2, ny//2)
     sp_star = make_spec(**star_params)
     hdul_disk_model = image_manip.make_disk_image(inst, disk_params, sp_star=sp_star)
     print('Input disk model shape: {}'.format(hdul_disk_model[0].data.shape))
@@ -155,80 +163,72 @@ def add_disk_into_model(disk_params, hdul_psfs, tel_point, inst, shape_new, star
     if display:
         fig1, ax1 = plt.subplots(1,1)
         fig1.suptitle('disk model input')
-        ax1.imshow(hdul_disk_model[0].data, vmin=0,vmax=20)
+        extent = 0.5 * np.array([-1,1,-1,1]) * hdul_disk_model[0].data.shape[0] * inst.pixelscale/osamp
+        ax1.imshow(hdul_disk_model[0].data, extent=extent, vmin=0,vmax=20)
         fig1.tight_layout()
         plt.show()
 
-
-    # Rotation necessary to go from sky coordinates to 'idl' frame
-    rotate_to_idl = -1*(tel_point.siaf_ap_obs.V3IdlYAngle + tel_point.pos_ang)
-
-
-    ### Dither position
-    # Select the first dither location offset
+    
+    # Step 2: Apply the pointing parameters: 
+    #         Rotate to telescope orientation, and shift with dither/pointing error offsets  
+    # Rotation necessary to go from sky coordinates to 'idl' frame   
+    # Dither position & pointing errors in arcsec
+    rotate_to_idl = -1*(tel_point.siaf_ap_obs.V3IdlYAngle + tel_point.pos_ang) 
     delx, dely = tel_point.position_offsets_act[0]
-    #hdul_out = image_manip.rotate_shift_image(hdul_disk_model, PA_offset=rotate_to_idl,
-    #                                          delx_asec=delx, dely_asec=dely)
-
-    ### Modification by Elodie: Warrning message then crash: PA_offset deprecated, replace by angle instead
     hdul_out = image_manip.rotate_shift_image(hdul_disk_model, angle=rotate_to_idl,
                                               delx_asec=delx, dely_asec=dely)
 
-    # Distort image on 'sci' coordinate grid
-    im_sci, xsci_im, ysci_im = image_manip.distort_image(hdul_out, ext=0, to_frame='sci', return_coords=True)
-
-    # Distort image onto 'tel' (V2, V3) coordinate grid for plot illustration
-    # im_tel, v2_im, v3_im = image_manip.distort_image(hdul_out, ext=0, to_frame='tel', return_coords=True)
-
-
-    '''This particular disk image is oversized, so we will need to crop the image after 
-    convolving PSFs. We may want to consider trimming some of this image prior to convolution,
-     depending on how some of the FoV is blocked before reaching the coronagraphic optics.'''
-     
-    # If the image is too large, then this process will eat up much of your computer's RAM
-    # So, crop image to more reasonable size (20% oversized)
-    siaf_ap = tel_point.siaf_ap_obs
-    osamp = inst.oversample
-    
-    xysize = int(1.2 * np.max([siaf_ap.XSciSize,siaf_ap.YSciSize]) * osamp)
-    xy_add = osamp - np.mod(xysize, osamp)
-    xysize += xy_add
-
-    im_sci = pad_or_cut_to_size(im_sci, xysize)
-    hdul_disk_model_sci = fits.HDUList(fits.PrimaryHDU(data=im_sci, header=hdul_out[0].header))
-    print('Resized disk model shape: {}'.format(im_sci.shape))
-
     if display:
         fig1, ax1 = plt.subplots(1,1)
-        fig1.suptitle('disk model rotate & resized')
-        ax1.imshow(im_sci, vmin=0,vmax=20)
+        fig1.suptitle('disk model rotated and shifted')
+        extent = 0.5 * np.array([-1,1,-1,1]) * hdul_out[0].data.shape[0] * inst.pixelscale/osamp
+        ax1.imshow(hdul_out[0].data, vmin=0,vmax=20, extent=extent)
         fig1.tight_layout()
         plt.show()
 
-    # Added by Elodie June 7th after chat with Kim
-    # Get X and Y indices corresponding to aperture reference
-    # xref, yref = self.siaf_ap.reference_point('sci')
-    # hdul_disk_model_sci[0].header['XIND_REF'] = (xref*osamp, "x index of aperture reference")
-    # hdul_disk_model_sci[0].header['YIND_REF'] = (yref*osamp, "y index of aperture reference")
+    # Step 3: Distort image on 'sci' coordinate grid. 
+    # Done Around normal sampling sci_cen (oversampling is applied afterward)
+    im_sci, xsci_im, ysci_im = image_manip.distort_image(hdul_out, ext=0, to_frame='sci', return_coords=True)
+    hdul_disk_model_sci = fits.HDUList(fits.PrimaryHDU(data=im_sci, header=hdul_out[0].header))
+
+    if display:
+        fig1, ax1 = plt.subplots(1,1)
+        fig1.suptitle('disk model distorted')
+        extent = 0.5 * np.array([-1,1,-1,1]) * im_sci.shape[0] * inst.pixelscale/osamp
+        ax1.imshow(im_sci, vmin=0,vmax=20, extent=extent)
+        fig1.tight_layout()
+        plt.show()
+
+
+    # Step 4: Convolve the image with spatially-variant PSF.
+    # Get X and Y indices corresponding to the center of aperture reference with the same sampling as disk model hdul
+    # Note: if XIND_REF or XCEN is not set, input_image.shape / 2 is assumed, with is off by 1.5pixel
+    xref, yref = siaf_ap.reference_point('sci')
+    hdul_disk_model_sci[0].header['XIND_REF'] = (xref*osamp, "x index of aperture reference")
+    hdul_disk_model_sci[0].header['YIND_REF'] = (yref*osamp, "y index of aperture reference")
     hdul_disk_model_sci[0].header['CFRAME'] = 'sci'
 
     # Convolve image
-    t0 = time()
-    im_conv = image_manip.convolve_image(hdul_disk_model_sci, hdul_psfs)
-    t1 = time()
-    print('Disk Convolution calculation time: {} s'.format(t1-t0))
-    print('Convolved disk shape: {}'.format(im_conv.shape)) #260x260
+    im_conv = image_manip.convolve_image(hdul_disk_model_sci, hdul_psfs, output_sampling=osamp)
+    print('\nConvolved disk shape: {}'.format(im_conv.shape)) #433x433
 
     if display:
         fig1, ax1 = plt.subplots(1,1)
         fig1.suptitle('Convolved disk')
-        ax1.imshow(im_conv, vmin=0,vmax=20)
+        extent = 0.5 * np.array([-1,1,-1,1]) * im_sci.shape[0] * inst.pixelscale/osamp
+        ax1.imshow(im_conv, vmin=0,vmax=20, extent=extent)
         fig1.tight_layout()
         plt.show()
     
-    # Crop or Expand the PSF to full frame and offset to proper position
-    # TODO: Ask Jarron if this shouldn't also need the offset_vals as for the stars
-    im_conv_resized = pad_or_cut_to_size(im_conv, shape_new)
+    # Step 5: Crop or Expand the PSF to full frame and offset to proper position
+    # Get `sci` position of the star, including offsets, errors, and dither  
+    coord_obj = (star_params['RA_obj'], star_params['Dec_obj'])
+    x_star, y_star = tel_point.radec_to_frame(coord_obj, frame_out='sci')
+    
+    # Get the corresponding shift from center (in regular detector pixel unit)
+    x_star_off, y_star_off = (x_star-x_cen, y_star-y_cen)
+    star_off_oversamp = (y_star_off * osamp, x_star_off * osamp)
+    im_conv_resized = pad_or_cut_to_size(im_conv, shape_new, offset_vals=star_off_oversamp)
     
     return im_conv_resized
 
@@ -529,7 +529,7 @@ inst.gen_wfemask_coeff()
 
 ### Calculate the grid of PSFs for extended objects convolution
 t0 = time()
-hdul_psfs = generate_grd_psf(inst)
+hdul_psfs = generate_grid_psf(inst)
 t1 = time()
 print('\nPSF Grid Calculation time: {} s'.format(t1-t0))
 print('Number of PSFs: {}'.format(len(hdul_psfs)))
@@ -710,16 +710,20 @@ cropsize = 101
 model_image_full = np.nanmean(obs_image_derot_list, axis=0)
 model_image = resize(model_image_full, [cropsize,cropsize]) #, cent=np.round(star_center_sci).astype(int)) 
 
-
+# sma = [0.397, 1.775, 3.29] 
 vmax = 700
 fig7, ax7 = plt.subplots(1,1,figsize=(8,6), dpi=130)
-im = ax7.imshow(model_image, norm=LogNorm(vmin=vmax/500, vmax=vmax))
+xsize_asec = cropsize * siaf_obs.XSciScale
+ysize_asec = cropsize * siaf_obs.YSciScale
+extent = [-1*xsize_asec/2, xsize_asec/2, -1*ysize_asec/2, ysize_asec/2]
+im = ax7.imshow(model_image, extent=extent, norm=LogNorm(vmin=vmax/500, vmax=vmax))
 # im = ax7.imshow(combined_image, vmin=vmin_lin, vmax=vmax)
+ax7.set_xlabel('RA offset (arcsec)')
+ax7.set_ylabel('Dec offset (arcsec)')
+plotAxes(ax7, position=(0.95,0.35), label1='E', label2='N')
 ax7.set_title('COMBINED HD141569 MODEL '+filt)
 plt.tight_layout()
 cbar = fig7.colorbar(im, ax=ax7)
 cbar.ax.set_title('Units TBD$')
 plt.show()
-
-
 
