@@ -111,14 +111,23 @@ def generate_star_psf(star_params, tel_point, inst, shape_new):
     x_star_off, y_star_off = (x_star-x_cen, y_star-y_cen)
     
     
+    # Rotation of ~5deg of the coronagraphic mask
+    field_rot = 0 if inst._rotation is None else inst._rotation
+
+    # Science positions in detector pixels
+    x_star_off_rot, y_star_off_rot = coords.xy_rot(1*x_star_off, 1*y_star_off, field_rot)
+    x_star_rot = x_cen + x_star_off_rot 
+    y_star_rot = y_cen + y_star_off_rot
+    
     # Create PSF with oversampling (included in `inst`)
     # hdul = inst.calc_psf_from_coeff(sp=sp_star, coord_vals=(x_star,y_star), coord_frame='sci')
     sp_star = make_spec(**star_params)
-    psf_image = inst.calc_psf_from_coeff(sp=sp_star, coord_vals=(x_star,y_star), coord_frame='sci', return_hdul=False)
+    psf_image = inst.calc_psf_from_coeff(sp=sp_star, coord_vals=(x_star_rot,y_star_rot), coord_frame='sci', return_hdul=False)
 
     # Get oversampled pixel shifts
     osamp = inst.oversample
-    star_off_oversamp = (y_star_off * osamp, x_star_off * osamp)
+    # star_off_oversamp = (y_star_off * osamp, x_star_off * osamp)
+    star_off_oversamp = (y_star_off_rot * osamp, x_star_off_rot * osamp)
     
     # Crop or Expand the PSF to full frame and offset to proper position
     psf_image_full = pad_or_cut_to_size(psf_image, shape_new, offset_vals=star_off_oversamp)
