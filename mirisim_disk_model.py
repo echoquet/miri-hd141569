@@ -111,14 +111,23 @@ def generate_star_psf(star_params, tel_point, inst, shape_new):
     x_star_off, y_star_off = (x_star-x_cen, y_star-y_cen)
     
     
+    # Rotation of ~5deg of the coronagraphic mask
+    field_rot = 0 if inst._rotation is None else inst._rotation
+
+    # Science positions in detector pixels
+    x_star_off_rot, y_star_off_rot = coords.xy_rot(1*x_star_off, 1*y_star_off, field_rot)
+    x_star_rot = x_cen + x_star_off_rot 
+    y_star_rot = y_cen + y_star_off_rot
+    
     # Create PSF with oversampling (included in `inst`)
     # hdul = inst.calc_psf_from_coeff(sp=sp_star, coord_vals=(x_star,y_star), coord_frame='sci')
     sp_star = make_spec(**star_params)
-    psf_image = inst.calc_psf_from_coeff(sp=sp_star, coord_vals=(x_star,y_star), coord_frame='sci', return_hdul=False)
+    psf_image = inst.calc_psf_from_coeff(sp=sp_star, coord_vals=(x_star_rot,y_star_rot), coord_frame='sci', return_hdul=False)
 
     # Get oversampled pixel shifts
     osamp = inst.oversample
-    star_off_oversamp = (y_star_off * osamp, x_star_off * osamp)
+    # star_off_oversamp = (y_star_off * osamp, x_star_off * osamp)
+    star_off_oversamp = (y_star_off_rot * osamp, x_star_off_rot * osamp)
     
     # Crop or Expand the PSF to full frame and offset to proper position
     psf_image_full = pad_or_cut_to_size(psf_image, shape_new, offset_vals=star_off_oversamp)
@@ -412,11 +421,11 @@ def resize(cube1, dim2, cent=[None,None]):
 
 #%% Simulation parameters
 
-star_A_Q = False
-star_B_Q = True
-star_C_Q = True
-disk_Q = True
-psf_sub = False
+star_A_Q = False  # Must be False in the disk modeling framework (we don't want to simulate starlight residuals)
+star_B_Q = True   # Optional, depends on the field of view of the final image
+star_C_Q = True   # Optional, depends on the field of view of the final image
+disk_Q = True     # Must be True in the disk modeling framework
+psf_sub = False   # Must be False in the disk modeling framework (we don't want to simulate starlight residuals)
 export_Q = False
 
 display_all_Q = True
@@ -456,15 +465,15 @@ elif mask_id == '1550':
 n_obs = len(pos_ang_list)
 
 
-# Information necessary to create pysynphot spectrum of star
+# Information necessary to create pysynphot spectrum of star, even if star_A_Q = False
 star_A_params = {
     'name': 'HD 141569 A', 
     'sptype': 'A2V', 
     'Teff': 10000, 'log_g': 4.28, 'metallicity': -0.5, # Merin et al. 2004
     'dist': 111.6,
     'flux': 64.02, 'flux_units': 'mJy', 'bp_ref': miri_filter('F1065C'),
-    'RA_obj'  :  +237.49061772933,     # RA (decimal deg) of source
-    'Dec_obj' :  -03.92120600474,      # Dec (decimal deg) of source
+    'RA_obj'  :  +237.49054012422786,     # RA (decimal deg) of source
+    'Dec_obj' :  -3.921290953058801,      # Dec (decimal deg) of source
 }
 
 
@@ -474,8 +483,8 @@ star_B_params = {
     'Teff': 3000, 'log_g': 4.28, 'metallicity': -0.5, # Merin et al. 2004
     'dist': 111.6,
     'flux': 34.22, 'flux_units': 'mJy', 'bp_ref': miri_filter('F1065C'),
-    'RA_obj'  :  237.48904057555,     # RA (decimal deg) of source
-    'Dec_obj' :  -03.91981148846,      # Dec (decimal deg) of source
+    'RA_obj'  :  237.48896543762223,     # RA (decimal deg) of source
+    'Dec_obj' :  -3.919897397019599,      # Dec (decimal deg) of source
 }
 
 
@@ -485,8 +494,8 @@ star_C_params = {
     'Teff': 3000, 'log_g': 4.28, 'metallicity': -0.5, # Merin et al. 2004
     'dist': 111.6,
     'flux': 45.49, 'flux_units': 'mJy', 'bp_ref': miri_filter('F1065C'),
-    'RA_obj'  :  237.48871296031,     # RA (decimal deg) of source
-    'Dec_obj' :  -03.9196089225,      # Dec (decimal deg) of source
+    'RA_obj'  :  237.4886562041795,     # RA (decimal deg) of source
+    'Dec_obj' :  -3.919700403624408,      # Dec (decimal deg) of source
 }
 
 if filt == 'F1550C':
@@ -534,19 +543,6 @@ t1 = time()
 print('\nPSF Grid Calculation time: {} s'.format(t1-t0))
 print('Number of PSFs: {}'.format(len(hdul_psfs)))
 print('PSF shape: {}'.format(hdul_psfs[0].data.shape))
-
-if display_all_Q:
-    psf_grid_summed = np.empty(hdul_psfs[0].data.shape)
-    for i in range(len(hdul_psfs)):
-        psf_grid_summed += hdul_psfs[i].data 
-    
-    fig1, ax1 = plt.subplots(1,1)
-    fig1.suptitle('PSF grid for disk')
-    # extent = 0.5 * np.array([-1,1,-1,1]) * inst.fov_pix * inst.pixelscale
-    ax1.imshow(psf_grid_summed/len(hdul_psfs) , norm=LogNorm(vmin=0.00001,vmax=0.001))
-    fig1.tight_layout()
-    plt.show()
-
 
 
 
@@ -602,6 +598,8 @@ for obs in range(n_obs):
     point_error = point_error_list[obs]
     dith_offsets_mod = [(dith[0] + point_error[0]*pixscale, dith[1] + point_error[1]*pixscale)  
                         for dith in dith_offsets_list[obs]]
+ 
+    
  
     # Telescope pointing information
     tel_point = jwst_point(ap_obs, ap_ref,ra_ref, dec_ref, 
@@ -663,7 +661,7 @@ for obs in range(n_obs):
     if display_all_Q :
         fig, ax = plt.subplots(1,1)
         fig.suptitle('Oversampled full image '+filt)
-        ax.imshow(obs_image_over, vmin=-0.5,vmax=1) 
+        ax.imshow(obs_image_over, vmin=0,vmax=20) 
         fig.tight_layout()
         plt.show()
 
@@ -682,8 +680,7 @@ for obs in range(n_obs):
     else:
         obs_image_sub = obs_image
 
-    # TODO: the derotation must be done about the star center, accounting for the pointing error
-    rotate_to_idl = -1*(tel_point.siaf_ap_obs.V3IdlYAngle + tel_point.pos_ang)
+    rotate_to_idl = -1 * tel_point.pos_ang
     obs_image_derot = image_manip.rotate_offset(obs_image_sub, rotate_to_idl, reshape=False, cval=np.nan)
     
     obs_image_list[obs] = obs_image
@@ -716,11 +713,11 @@ fig7, ax7 = plt.subplots(1,1,figsize=(8,6), dpi=130)
 xsize_asec = cropsize * siaf_obs.XSciScale
 ysize_asec = cropsize * siaf_obs.YSciScale
 extent = [-1*xsize_asec/2, xsize_asec/2, -1*ysize_asec/2, ysize_asec/2]
-im = ax7.imshow(model_image, extent=extent, norm=LogNorm(vmin=vmax/500, vmax=vmax))
+im = ax7.imshow(model_image, norm=LogNorm(vmin=vmax/500, vmax=vmax))#, extent=extent)
 # im = ax7.imshow(combined_image, vmin=vmin_lin, vmax=vmax)
-ax7.set_xlabel('RA offset (arcsec)')
-ax7.set_ylabel('Dec offset (arcsec)')
-plotAxes(ax7, position=(0.95,0.35), label1='E', label2='N')
+# ax7.set_xlabel('RA offset (arcsec)')
+# ax7.set_ylabel('Dec offset (arcsec)')
+# plotAxes(ax7, position=(0.95,0.35), label1='E', label2='N')
 ax7.set_title('COMBINED HD141569 MODEL '+filt)
 plt.tight_layout()
 cbar = fig7.colorbar(im, ax=ax7)
