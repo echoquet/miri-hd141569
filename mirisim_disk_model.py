@@ -18,6 +18,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from astropy.io import fits
+from astropy import units as u
 from time import time
 
 import webbpsf_ext
@@ -183,6 +184,7 @@ def add_disk_into_model(disk_params, hdul_psfs, tel_point, inst, shape_new, star
     # Rotation necessary to go from sky coordinates to 'idl' frame   
     # Dither position & pointing errors in arcsec
     rotate_to_idl = -1*(tel_point.siaf_ap_obs.V3IdlYAngle + tel_point.pos_ang) 
+    rotate_to_idl = -tel_point.pos_ang
     delx, dely = tel_point.position_offsets_act[0]
     hdul_out = image_manip.rotate_shift_image(hdul_disk_model, angle=rotate_to_idl,
                                               delx_asec=delx, dely_asec=dely)
@@ -429,6 +431,13 @@ def generate_MIRI_observation(inst, pos_ang, base_offset, point_error, dith_offs
     t4 = time()
     print('     Calculation time for image reshaping: {}s'.format(t4-t3))
 
+    if display :
+        fig, ax = plt.subplots(1,1)
+        fig.suptitle('Resampled full image '+filt)
+        ax.imshow(obs_image, vmin=0,vmax=20) 
+        fig.tight_layout()
+        plt.show()
+        
     return obs_image, tel_point
 
 
@@ -529,7 +538,7 @@ def generate_MIRI_observation(inst, pos_ang, base_offset, point_error, dith_offs
 psf_sub = False   # Must be False in the disk modeling framework (we don't want to simulate starlight residuals)
 export_Q = False
 
-display_all_Q = False
+display_all_Q = True
 
 # Mask information
 mask_id = '1140'
@@ -549,7 +558,7 @@ if mask_id == '1065':
     pos_ang_list = [107.73513043, 117.36721388]            #deg, list of telescope V3 axis PA for each observation
     base_offset_list =[(0,0), (0,0)]                       #arcsec, list of nominal pointing offsets for each observation ((BaseX, BaseY) columns in .pointing file)
     dith_offsets_list = [[(0,0)], [(0,0)]]                 #arcsec, list of nominal dither offsets for each observation ((DithX, DithY) columns in .pointing file)
-    point_error_list = [(-0.20, -1.17), (-0.12, -1.10)]   #pix, list of measured pointing errors for each observation (ErrX, ErrY)
+    # point_error_list = [(-0.20, -1.17), (-0.12, -1.10)]   #pix, list of measured pointing errors for each observation (ErrX, ErrY)
     point_error_list = [(-1.17, -0.20), (-1.10, -0.12)]   #pix, list of measured pointing errors for each observation (ErrX, ErrY)
 
 elif mask_id == '1140':
@@ -563,7 +572,7 @@ elif mask_id == '1550':
     pos_ang_list = [107.65929307, 117.31215657]            #deg
     base_offset_list =[(0,0), (0,0)]                       #arcsec
     dith_offsets_list = [[(0,0)], [(0,0)]]                 #arcsec
-    point_error_list = [(0.26, 0.22), (0.14, 0.01)]       #pix
+    # point_error_list = [(0.26, 0.22), (0.14, 0.01)]       #pix
     point_error_list = [(0.22, 0.26), (0.01, 0.14)]       #pix
 
 n_obs = len(pos_ang_list)
@@ -634,6 +643,7 @@ miri_data = fits.getdata(os.path.join(path_MIRI_data, miri_data_filename))
 cropsize = miri_data.shape[0]
 
 
+
 #%% Create the PSF structure
 
 
@@ -680,32 +690,63 @@ The outputs of MCFOST are fits files, and cannot be output variable like numpy a
 
 '''
 
-path_model = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled_sept_2022'
-param_file_init =  'HD141569_miri_3rings_mcfost_v3.para'
-
-os.chdir(os.path.join(path_model))
-subprocess.call('mcfost {}'.format(param_file),shell=True) #computes SED
-subprocess.call('mcfost {} -img {}'.format(param_file, disk_params['wavelength']),shell=True) #computes image
-
-subprocess.call('mv data_th data_th_all',shell=True)
-subprocess.call('rm _dust_prop_th.tmp',shell=True)
-subprocess.call('rm _dust_prop_SED.tmp',shell=True)
-
-# Model conversion to Jy/pixel and removing central star
+# path_model = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled_sept_2022'
+# param_file_init =  'HD141569_miri_3rings_mcfost_v3.para'
 
 
+path_model = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled_sept_2022/Model_Pantin_inner_ring_v1'
+mcfost_model_file = 'data_11.40/RT.fits.gz'
 
+remove_central_star = True
+
+export_input_model = True
+export_folder = path_model
+export_fileName = 'HD141569_Model_tmp_F1140C.fits'
+
+
+input_file = os.path.join(path_model, mcfost_model_file)
+input_model_all = fits.getdata(input_file)
+input_header = fits.getheader(input_file)
+lbd = input_header['WAVE']
+pixscale_model = input_header['CDELT2']
+if input_header['CUNIT2'] == 'deg':
+    pixscale_model *= 3600
+
+# For the MIRI simulations we only need component 1.
+input_model = input_model_all[0,0,0,:,:]
+dim = np.shape(input_model)
+centerPix = [dim[0]//2, dim[1]//2]
+
+if remove_central_star:
+    input_model[centerPix[0], centerPix[1]] = 0
+
+# The MCFOST images are in W.m-2.pixel-1 (lambda.F_lambda)
+# We need to convert them into Jy.pixel-1.
+
+input_model_Units = input_model * (u.W/u.m**2)
+input_model_Jy = input_model_Units.to(u.Jy, equivalencies=u.spectral_density(lbd * u.micron))
+
+
+hdul_input_model = fits.HDUList(fits.PrimaryHDU(data=input_model_Jy.value))
+hdul_input_model[0].header['BUNIT'] = 'Jy.pixel-1'
+hdul_input_model[0].header['WAVE'] = lbd
+
+if export_input_model:
+    hdul_input_model.writeto(os.path.join(export_folder, export_fileName), overwrite=True)
+    
+    
 #packaging the output:
 disk_params = {
     'simulate': True,
     # 'file': "/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled/HD141569_Model_Pantin_F1065C.fits",
-    'file': '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled_sept_2022/HD141569_Model_tmp_F1140C.fits',
+    # 'file': '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled_sept_2022/HD141569_Model_tmp_F1140C.fits',
     # 'file': "./radmc_model/images/image_MIRI_FQPM_{}_{}.fits".format(target,10.575),
-    'pixscale': 0.027491, 
-    'wavelength': 11.4,
+    'file': hdul_input_model,
+    'pixscale': pixscale_model, #0.027491, 
+    'wavelength': lbd, #11.4,
     'units': 'Jy/pixel',
     'dist' : 116,
-    'cen_star' : False,
+    'cen_star' : (not remove_central_star),
 }
 
 
@@ -766,7 +807,6 @@ for obs in range(n_obs):
     else:
         obs_image_sub = obs_image
 
-    # rotate_to_idl = -1 * tel_point.pos_ang
     obs_image_derot = image_manip.rotate_offset(obs_image_sub, -pos_ang, reshape=False, cval=np.nan)
     
     obs_image_list[obs] = obs_image
@@ -804,6 +844,7 @@ fig7, ax7 = plt.subplots(1,3,figsize=(18,6), dpi=130)
 xsize_asec = cropsize * siaf_obs.XSciScale
 ysize_asec = cropsize * siaf_obs.YSciScale
 extent = [-1*xsize_asec/2, xsize_asec/2, -1*ysize_asec/2, ysize_asec/2]
+# im = ax7[0].imshow(input_model_Jy, norm=LogNorm(vmin=vmax/500, vmax=vmax))#, extent=extent)
 im = ax7[0].imshow(model_image_units, norm=LogNorm(vmin=vmax/500, vmax=vmax))#, extent=extent)
 im = ax7[1].imshow(miri_data, norm=LogNorm(vmin=vmax/500, vmax=vmax))#, extent=extent)
 # im2 = ax7[2].imshow(miri_data - model_image_units, norm=LogNorm(vmin=vmax/500, vmax=vmax))#, extent=extent)
