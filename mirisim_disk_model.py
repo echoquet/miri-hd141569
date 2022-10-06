@@ -18,6 +18,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from astropy.io import fits
+from astropy import units as u
 from time import time
 
 import webbpsf_ext
@@ -144,7 +145,7 @@ def generate_star_psf(star_params, tel_point, inst, shape_new):
 ## time to make the disk mode
 ## it's fine to use the same star & PSF grids if we want several disk models
 ## of course the disk model needs updating
-def add_disk_into_model(disk_params, hdul_psfs, tel_point, inst, shape_new, star_params, display=True):
+def add_disk_into_model(disk_params, hdul_psfs, tel_point, inst, shape_new, star_params, display=False):
     '''
     Properly including extended objects is a little more complicated than for point sources. 
     First, we need properly format the input model to a pixel binning and flux units 
@@ -183,6 +184,7 @@ def add_disk_into_model(disk_params, hdul_psfs, tel_point, inst, shape_new, star
     # Rotation necessary to go from sky coordinates to 'idl' frame   
     # Dither position & pointing errors in arcsec
     rotate_to_idl = -1*(tel_point.siaf_ap_obs.V3IdlYAngle + tel_point.pos_ang) 
+    rotate_to_idl = -tel_point.pos_ang
     delx, dely = tel_point.position_offsets_act[0]
     hdul_out = image_manip.rotate_shift_image(hdul_disk_model, angle=rotate_to_idl,
                                               delx_asec=delx, dely_asec=dely)
@@ -243,7 +245,7 @@ def add_disk_into_model(disk_params, hdul_psfs, tel_point, inst, shape_new, star
 
 
 
-def quick_ref_psf(idl_coord, inst, out_shape, star_params=None):
+def quick_ref_psf(idl_coord, inst, tel_point, out_shape, star_params=None):
     """
     Create a quick reference PSF for subtraction of the science target.
     """
@@ -329,6 +331,114 @@ def resize(cube1, dim2, cent=[None,None]):
     return cube2
 
 
+def generate_MIRI_observation(inst, pos_ang, base_offset, point_error, dith_offsets_mod, shape_new, 
+                              star_A_params, star_B_params, star_C_params, disk_params, hdul_psfs,
+                              display=False):
+    
+    print('--- Setting the pointing parameters:')
+    # For each observation, define the telescope pointing. 
+    # This accounts for telescope V3 axis angle, nominal offset, nominal dither offsets, and measured pointing error.
+    
+    # NOTE: the pointing errors are implemented as an (X,Y) dither offset. 
+    # This is done rather crudely in the pixel to arcsec conversion, compared to 
+    # using the SIAF system in the rest of the code.
+    # TODO: improve on the implementation of the poiting error.
+    
+    ap_obs = inst.aperturename
+    ap_ref = ap_obs   # f'MIRIM_MASK{mask_id}'
+    ra_ref = star_A_params['RA_obj']
+    dec_ref = star_A_params['Dec_obj']
+    filt = inst.filter
+    osamp = inst.oversample
+ 
+    # Telescope pointing information
+    t0 =time()
+    tel_point = jwst_point(ap_obs, ap_ref,ra_ref, dec_ref, 
+                           pos_ang=pos_ang, base_offset=base_offset, dith_offsets=dith_offsets_mod,
+                           base_std=0, dith_std=0)
+    t1 =time()
+    # Get sci position of center in units of detector pixels
+    # Elodie: gives the position of the mask center, in pixels 
+    # siaf_ap = tel_point.siaf_ap_obs
+    # # x_cen, y_cen = siaf_ap.reference_point('sci')
+    
+    # # Elodie: gives the full frame image size in pixel, inc. oversampling (432x432 with osamp=2)
+    # ny_pix, nx_pix = (siaf_ap.YSciSize, siaf_ap.XSciSize)
+    # shape_new = (ny_pix * osamp, nx_pix * osamp)
+    
+    print('     Reference aperture: {}'.format(tel_point.siaf_ap_ref.AperName))
+    print('     Telescope orientation: {:.3f} deg'.format(pos_ang))
+    print('     Nominal RA, Dec = ({:.6f}, {:.6f})'.format(tel_point.ra_ref, tel_point.dec_ref))     
+    print('     Scene nominal offet: ({:.3f}, {:.3f}) arcsec'.format(base_offset[0], base_offset[1]))   
+    print('     Relative offsets for each dither position (incl. pointing errors)')
+    for i, offset in enumerate(tel_point.position_offsets_act):
+        print('  Position {}: ({:.4f}, {:.4f}) arcsec'.format(i, offset[0],offset[1]))
+    print('     Calculation time for pointing init: {}s'.format(t1-t0))
+        
+        
+    
+    print('--- Creating the instrument image with stars and disk:')
+    # Generate the stars PSFs
+    star_A_Q = star_A_params['simulate']
+    star_B_Q = star_B_params['simulate']
+    star_C_Q = star_C_params['simulate']
+    
+    obs_image_over = np.zeros(shape_new)
+    if star_A_Q:
+        print('     Creating Star A image')
+        psf_star_A = generate_star_psf(star_A_params, tel_point, inst, shape_new)
+        obs_image_over += psf_star_A
+    if star_B_Q:
+        print('     Creating Star B image')
+        psf_star_B = generate_star_psf(star_B_params, tel_point, inst, shape_new)
+        obs_image_over += psf_star_B
+    if star_C_Q:
+        print('     Creating Star C image')
+        psf_star_C = generate_star_psf(star_C_params, tel_point, inst, shape_new)
+        obs_image_over += psf_star_C
+    t2 = time()
+    print('     Calculation time for Star creation: {}s'.format(t2-t1))
+    
+    # Display the simulated stars
+    if display and (star_A_Q or star_B_Q or star_C_Q):
+        fig, ax = plt.subplots(1,1)
+        fig.suptitle('Oversampled image stars '+filt)
+        ax.imshow(obs_image_over, vmin=-0.5,vmax=1) 
+        fig.tight_layout()
+        plt.show()
+    
+    
+    # Generate the disk image
+    disk_Q = disk_params['simulate']
+    if disk_Q:
+        print('     Creating Disk image')
+        disk_image = add_disk_into_model(disk_params, hdul_psfs, tel_point, inst, shape_new, star_A_params)
+        obs_image_over += disk_image
+    t3 = time()
+    print('     Calculation time for Disk creation: {}s'.format(t3-t2))
+    
+    # Display the total image
+    if display :
+        fig, ax = plt.subplots(1,1)
+        fig.suptitle('Oversampled full image '+filt)
+        ax.imshow(obs_image_over, vmin=0,vmax=20) 
+        fig.tight_layout()
+        plt.show()
+
+
+    # Rebin science data to detector pixels
+    obs_image = image_manip.frebin(obs_image_over, scale=1/osamp)
+    t4 = time()
+    print('     Calculation time for image reshaping: {}s'.format(t4-t3))
+
+    if display :
+        fig, ax = plt.subplots(1,1)
+        fig.suptitle('Resampled full image '+filt)
+        ax.imshow(obs_image, vmin=0,vmax=20) 
+        fig.tight_layout()
+        plt.show()
+        
+    return obs_image, tel_point
 
 
     #%% Figurre Jarron
@@ -421,10 +531,10 @@ def resize(cube1, dim2, cent=[None,None]):
 
 #%% Simulation parameters
 
-star_A_Q = False  # Must be False in the disk modeling framework (we don't want to simulate starlight residuals)
-star_B_Q = True   # Optional, depends on the field of view of the final image
-star_C_Q = True   # Optional, depends on the field of view of the final image
-disk_Q = True     # Must be True in the disk modeling framework
+# star_A_Q = False  # Must be False in the disk modeling framework (we don't want to simulate starlight residuals)
+# star_B_Q = True   # Optional, depends on the field of view of the final image
+# star_C_Q = True   # Optional, depends on the field of view of the final image
+# disk_Q = True     # Must be True in the disk modeling framework
 psf_sub = False   # Must be False in the disk modeling framework (we don't want to simulate starlight residuals)
 export_Q = False
 
@@ -448,25 +558,29 @@ if mask_id == '1065':
     pos_ang_list = [107.73513043, 117.36721388]            #deg, list of telescope V3 axis PA for each observation
     base_offset_list =[(0,0), (0,0)]                       #arcsec, list of nominal pointing offsets for each observation ((BaseX, BaseY) columns in .pointing file)
     dith_offsets_list = [[(0,0)], [(0,0)]]                 #arcsec, list of nominal dither offsets for each observation ((DithX, DithY) columns in .pointing file)
-    point_error_list = [(-0.20, -1.17), (-0.12, -1.10)]   #pix, list of measured pointing errors for each observation (ErrX, ErrY)
+    # point_error_list = [(-0.20, -1.17), (-0.12, -1.10)]   #pix, list of measured pointing errors for each observation (ErrX, ErrY)
+    point_error_list = [(-1.17, -0.20), (-1.10, -0.12)]   #pix, list of measured pointing errors for each observation (ErrX, ErrY)
 
 elif mask_id == '1140':
     pos_ang_list = [107.7002475 , 117.34017049]            #deg
     base_offset_list =[(0,0), (0,0)]                       #arcsec
     dith_offsets_list = [[(0,0)], [(0,0)]]                 #arcsec
-    point_error_list = [(0.12, 0.05), (0.07, -0.02)]      #pix
+    # point_error_list = np.array([(0.12, 0.05), (0.07, -0.02)])      #pix
+    point_error_list = np.array([(0.05, 0.12), (-0.02, 0.07)])      #pix
 
 elif mask_id == '1550':
     pos_ang_list = [107.65929307, 117.31215657]            #deg
     base_offset_list =[(0,0), (0,0)]                       #arcsec
     dith_offsets_list = [[(0,0)], [(0,0)]]                 #arcsec
-    point_error_list = [(0.26, 0.22), (0.14, 0.01)]       #pix
+    # point_error_list = [(0.26, 0.22), (0.14, 0.01)]       #pix
+    point_error_list = [(0.22, 0.26), (0.01, 0.14)]       #pix
 
 n_obs = len(pos_ang_list)
 
 
 # Information necessary to create pysynphot spectrum of star, even if star_A_Q = False
 star_A_params = {
+    'simulate': False,
     'name': 'HD 141569 A', 
     'sptype': 'A2V', 
     'Teff': 10000, 'log_g': 4.28, 'metallicity': -0.5, # Merin et al. 2004
@@ -478,6 +592,7 @@ star_A_params = {
 
 
 star_B_params = {
+    'simulate': True,
     'name': 'HD 141569 B', 
     'sptype': 'M5V', 
     'Teff': 3000, 'log_g': 4.28, 'metallicity': -0.5, # Merin et al. 2004
@@ -489,6 +604,7 @@ star_B_params = {
 
 
 star_C_params = {
+    'simulate': True,
     'name': 'HD 141569 C', 
     'sptype': 'M5V', 
     'Teff': 3000, 'log_g': 4.28, 'metallicity': -0.5, # Merin et al. 2004
@@ -505,14 +621,28 @@ if filt == 'F1550C':
     
 
 disk_params = {
-    'file': "/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled/HD141569_Model_Pantin_F1065C.fits",
+    'simulate': True,
+    # 'file': "/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled/HD141569_Model_Pantin_F1065C.fits",
+    'file': '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled_sept_2022/HD141569_Model_tmp_F1140C.fits',
     # 'file': "./radmc_model/images/image_MIRI_FQPM_{}_{}.fits".format(target,10.575),
     'pixscale': 0.027491, 
-    'wavelength': 10.65,
+    'wavelength': 11.4,
     'units': 'Jy/pixel',
     'dist' : 116,
-    'cen_star' : True,
+    'cen_star' : False,
 }
+
+#%% Get the observed, combined MIRI image
+# these data are in mJy/arcsec2
+
+path_MIRI_data = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_PROCESSED'
+miri_data_filename = 'HD141569_{}_v4_combined.fits'.format(filt)
+
+miri_data = fits.getdata(os.path.join(path_MIRI_data, miri_data_filename)) 
+
+cropsize = miri_data.shape[0]
+
+
 
 #%% Create the PSF structure
 
@@ -544,10 +674,83 @@ print('\nPSF Grid Calculation time: {} s'.format(t1-t0))
 print('Number of PSFs: {}'.format(len(hdul_psfs)))
 print('PSF shape: {}'.format(hdul_psfs[0].data.shape))
 
+#%% Disk model creation
+'''
+This section generates a disk model and packages it for the MIRI image simulator.
+The output is the disk_params dictionary. 
+    - 'simulate': flag to include or not the disk in the simulation [must be true]
+    - 'file': can be either the path to the model fits file or the hdulist itself.
+    - 'pixscale': the pixel size of the disk model. [recommandation: oversample by x4]
+    - 'wavelength': the wavelegnth of the simulated disk model
+    - 'units': the units of the disk model. [mult be physical unit: uJy, mJy, Jy, MJy]
+    - 'dist': the system distance
+    - 'cen_star': flag indicating the presence of the central star. [Recommandation to remove the star from the model]
+Note; this part is developped for MCFOST but can be replaced by other disk modeling code.
+The outputs of MCFOST are fits files, and cannot be output variable like numpy arrays, so here 'file' is the path to the model.
+
+'''
+
+# path_model = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled_sept_2022'
+# param_file_init =  'HD141569_miri_3rings_mcfost_v3.para'
 
 
+path_model = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled_sept_2022/Model_Pantin_inner_ring_v1'
+mcfost_model_file = 'data_11.40/RT.fits.gz'
 
-#%% Observation setup
+remove_central_star = True
+
+export_input_model = True
+export_folder = path_model
+export_fileName = 'HD141569_Model_tmp_F1140C.fits'
+
+
+input_file = os.path.join(path_model, mcfost_model_file)
+input_model_all = fits.getdata(input_file)
+input_header = fits.getheader(input_file)
+lbd = input_header['WAVE']
+pixscale_model = input_header['CDELT2']
+if input_header['CUNIT2'] == 'deg':
+    pixscale_model *= 3600
+
+# For the MIRI simulations we only need component 1.
+input_model = input_model_all[0,0,0,:,:]
+dim = np.shape(input_model)
+centerPix = [dim[0]//2, dim[1]//2]
+
+if remove_central_star:
+    input_model[centerPix[0], centerPix[1]] = 0
+
+# The MCFOST images are in W.m-2.pixel-1 (lambda.F_lambda)
+# We need to convert them into Jy.pixel-1.
+
+input_model_Units = input_model * (u.W/u.m**2)
+input_model_Jy = input_model_Units.to(u.Jy, equivalencies=u.spectral_density(lbd * u.micron))
+
+
+hdul_input_model = fits.HDUList(fits.PrimaryHDU(data=input_model_Jy.value))
+hdul_input_model[0].header['BUNIT'] = 'Jy.pixel-1'
+hdul_input_model[0].header['WAVE'] = lbd
+
+if export_input_model:
+    hdul_input_model.writeto(os.path.join(export_folder, export_fileName), overwrite=True)
+    
+    
+#packaging the output:
+disk_params = {
+    'simulate': True,
+    # 'file': "/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled/HD141569_Model_Pantin_F1065C.fits",
+    # 'file': '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled_sept_2022/HD141569_Model_tmp_F1140C.fits',
+    # 'file': "./radmc_model/images/image_MIRI_FQPM_{}_{}.fits".format(target,10.575),
+    'file': hdul_input_model,
+    'pixscale': pixscale_model, #0.027491, 
+    'wavelength': lbd, #11.4,
+    'units': 'Jy/pixel',
+    'dist' : 116,
+    'cen_star' : (not remove_central_star),
+}
+
+
+#%% Creating the MIRI combined disk image
 '''
 Configuring observation settings
 
@@ -567,9 +770,9 @@ are A1, A2, A3, and A4.
 
 # Observed and reference apertures
 ap_obs = inst.aperturename
-ap_ref = ap_obs   # f'MIRIM_MASK{mask_id}'
-ra_ref = star_A_params['RA_obj']
-dec_ref = star_A_params['Dec_obj']
+# ap_ref = ap_obs   # f'MIRIM_MASK{mask_id}'
+# ra_ref = star_A_params['RA_obj']
+# dec_ref = star_A_params['Dec_obj']
 
 siaf_obs = inst.siaf[ap_obs]
 ny_pix, nx_pix = (siaf_obs.YSciSize, siaf_obs.XSciSize)
@@ -580,114 +783,39 @@ obs_image_list = np.zeros((n_obs, ny_pix, nx_pix))
 obs_image_sub_list = np.zeros((n_obs, ny_pix, nx_pix))
 obs_image_derot_list = np.zeros((n_obs, ny_pix, nx_pix))
 
+t00 = time()
 for obs in range(n_obs):
-    print('###### Generating Observation {}/{} ######'.format(obs+1, n_obs))
+    print('###### Generating Observation {}/{} ######'.format(obs+1, n_obs)) 
     
-    
-    print('--- Setting the pointing parameters:')
-    # For each observation, define the telescope pointing. 
-    # This accounts for telescope V3 axis angle, nominal offset, nominal dither offsets, and measured pointing error.
-    
-    # NOTE: the pointing errors are implemented as an (X,Y) dither offset. 
-    # This is done rather crudely in the pixel to arcsec conversion, compared to 
-    # using the SIAF system in the rest of the code.
-    # TODO: improve on the implementation of the poiting error.
-
     pos_ang = pos_ang_list[obs]
     base_offset = base_offset_list[obs]
     point_error = point_error_list[obs]
     dith_offsets_mod = [(dith[0] + point_error[0]*pixscale, dith[1] + point_error[1]*pixscale)  
                         for dith in dith_offsets_list[obs]]
  
-    
- 
-    # Telescope pointing information
-    tel_point = jwst_point(ap_obs, ap_ref,ra_ref, dec_ref, 
-                           pos_ang=pos_ang, base_offset=base_offset, dith_offsets=dith_offsets_mod,
-                           base_std=0, dith_std=0)
-    
-    # Get sci position of center in units of detector pixels
-    # Elodie: gives the position of the mask center, in pixels 
-    # siaf_ap = tel_point.siaf_ap_obs
-    # # x_cen, y_cen = siaf_ap.reference_point('sci')
-    
-    # # Elodie: gives the full frame image size in pixel, inc. oversampling (432x432 with osamp=2)
-    # ny_pix, nx_pix = (siaf_ap.YSciSize, siaf_ap.XSciSize)
-    # shape_new = (ny_pix * osamp, nx_pix * osamp)
-    
-    print('     Reference aperture: {}'.format(tel_point.siaf_ap_ref.AperName))
-    print('     Telescope orientation: {:.3f} deg'.format(pos_ang))
-    print('     Nominal RA, Dec = ({:.6f}, {:.6f})'.format(tel_point.ra_ref, tel_point.dec_ref))     
-    print('     Scene nominal offet: ({:.3f}, {:.3f}) arcsec'.format(base_offset[0], base_offset[1]))   
-    print('     Relative offsets for each dither position (incl. pointing errors)')
-    for i, offset in enumerate(tel_point.position_offsets_act):
-        print('  Position {}: ({:.4f}, {:.4f}) arcsec'.format(i, offset[0],offset[1]))
-        
-        
-    
-    print('--- Creating the instrument image with stars and disk:')
-    # Generate the stars PSFs
-    obs_image_over = np.zeros(shape_new)
-    if star_A_Q:
-        print('     Creating Star A image')
-        psf_star_A = generate_star_psf(star_A_params, tel_point, inst, shape_new)
-        obs_image_over += psf_star_A
-    if star_B_Q:
-        print('     Creating Star B image')
-        psf_star_B = generate_star_psf(star_B_params, tel_point, inst, shape_new)
-        obs_image_over += psf_star_B
-    if star_C_Q:
-        print('     Creating Star C image')
-        psf_star_C = generate_star_psf(star_C_params, tel_point, inst, shape_new)
-        obs_image_over += psf_star_C
-
-    
-    # Display the simulated stars
-    if display_all_Q and (star_A_Q or star_B_Q or star_C_Q):
-        fig, ax = plt.subplots(1,1)
-        fig.suptitle('Oversampled image stars '+filt)
-        ax.imshow(obs_image_over, vmin=-0.5,vmax=1) 
-        fig.tight_layout()
-        plt.show()
-    
-    
-    # Generate the disk image
-    if disk_Q:
-        print('     Creating Disk image')
-        disk_image = add_disk_into_model(disk_params, hdul_psfs, tel_point, inst, shape_new, star_params=star_A_params)
-        obs_image_over += disk_image
-    
-    # Display the total image
-    if display_all_Q :
-        fig, ax = plt.subplots(1,1)
-        fig.suptitle('Oversampled full image '+filt)
-        ax.imshow(obs_image_over, vmin=0,vmax=20) 
-        fig.tight_layout()
-        plt.show()
-
-
-    # Rebin science data to detector pixels
-    obs_image = image_manip.frebin(obs_image_over, scale=1/osamp)
-    print('Detector sampled final image shape: {}'.format(obs_image.shape)) #216x216
+    obs_image, tel_point = generate_MIRI_observation(inst, pos_ang, base_offset, point_error, dith_offsets_mod, shape_new, 
+                                          star_A_params, star_B_params, star_C_params, disk_params, hdul_psfs,
+                                          display=display_all_Q)
 
     # Subtract a reference PSF from the science data
     if psf_sub:
         print('--- Subtracting the central star:')
-        coord_vals = tel_point.position_offsets_act[0]
-        im_psf = quick_ref_psf(coord_vals, inst, obs_image.shape, star_params=star_A_params)
+        coord_vals = dith_offsets_mod[0] #tel_point.position_offsets_act[0]
+        im_psf = quick_ref_psf(coord_vals, inst, tel_point, obs_image.shape, star_params=star_A_params)
         im_ref = image_manip.frebin(im_psf, scale=1/osamp)
         obs_image_sub = obs_image - im_ref
     else:
         obs_image_sub = obs_image
 
-    rotate_to_idl = -1 * tel_point.pos_ang
-    obs_image_derot = image_manip.rotate_offset(obs_image_sub, rotate_to_idl, reshape=False, cval=np.nan)
+    obs_image_derot = image_manip.rotate_offset(obs_image_sub, -pos_ang, reshape=False, cval=np.nan)
     
     obs_image_list[obs] = obs_image
     obs_image_sub_list[obs] = obs_image_sub
     obs_image_derot_list[obs] = obs_image_derot
+    
+t11 = time()
+print('Calculation time for {} obs creation: {}s'.format(n_obs, t11-t00))
 
-#%% Derotating and Combining the two rolls
 print('Generation of each observation complete!\n')
 if display_all_Q:
     plmax = obs_image_sub_list.max()/10
@@ -703,24 +831,33 @@ if display_all_Q:
 
 print('###### Combining the dataset')
 # Finally getting the final combined image to compare with the real MIRI image
-cropsize = 101
 model_image_full = np.nanmean(obs_image_derot_list, axis=0)
-model_image = resize(model_image_full, [cropsize,cropsize]) #, cent=np.round(star_center_sci).astype(int)) 
+model_image = resize(model_image_full, [cropsize,cropsize], cent=(np.array([ny_pix, nx_pix])-1)//2 )
+model_image_units = model_image * pixscale**2
+t22 = time()
+print('Calculation time for {} obs combination: {}s'.format(n_obs, t22-t11))
+print('Total Calculation time for full disk image creation: {}s'.format(t22-t00))
 
 # sma = [0.397, 1.775, 3.29] 
-vmax = 700
-fig7, ax7 = plt.subplots(1,1,figsize=(8,6), dpi=130)
+vmax = 40
+fig7, ax7 = plt.subplots(1,3,figsize=(18,6), dpi=130)
 xsize_asec = cropsize * siaf_obs.XSciScale
 ysize_asec = cropsize * siaf_obs.YSciScale
 extent = [-1*xsize_asec/2, xsize_asec/2, -1*ysize_asec/2, ysize_asec/2]
-im = ax7.imshow(model_image, norm=LogNorm(vmin=vmax/500, vmax=vmax))#, extent=extent)
+# im = ax7[0].imshow(input_model_Jy, norm=LogNorm(vmin=vmax/500, vmax=vmax))#, extent=extent)
+im = ax7[0].imshow(model_image_units, norm=LogNorm(vmin=vmax/500, vmax=vmax))#, extent=extent)
+im = ax7[1].imshow(miri_data, norm=LogNorm(vmin=vmax/500, vmax=vmax))#, extent=extent)
+# im2 = ax7[2].imshow(miri_data - model_image_units, norm=LogNorm(vmin=vmax/500, vmax=vmax))#, extent=extent)
+im2 = ax7[2].imshow(miri_data - model_image_units, vmin=-vmax/5, vmax=vmax/10)#, extent=extent)
 # im = ax7.imshow(combined_image, vmin=vmin_lin, vmax=vmax)
 # ax7.set_xlabel('RA offset (arcsec)')
 # ax7.set_ylabel('Dec offset (arcsec)')
 # plotAxes(ax7, position=(0.95,0.35), label1='E', label2='N')
-ax7.set_title('COMBINED HD141569 MODEL '+filt)
+ax7[0].set_title('COMBINED HD141569 MODEL '+filt)
+ax7[1].set_title('OBSERVED HD141569 IMAGE '+filt)
+ax7[2].set_title('Difference '+filt)
 plt.tight_layout()
 cbar = fig7.colorbar(im, ax=ax7)
-cbar.ax.set_title('Units TBD$')
+cbar.ax.set_title('mJy.arcsec$^{-2}$')
 plt.show()
 
