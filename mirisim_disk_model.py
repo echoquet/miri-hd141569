@@ -33,7 +33,7 @@ plt.rcParams["image.cmap"] = 'gist_heat'#'hot'#'copper'
 # TODO: make sure the central star is removed from the model if flag in dictionary is false
 # TODO: Check that the flux matches the simulation (photometry is preserved)
 # Simplify the code to keep the smaller FOV instead of full detector size
-# add support for mcfost (?) or convert into a functionto include in another simulation code
+# add support for mcfost (?) 
 
 
 #%% Functions
@@ -541,39 +541,38 @@ export_Q = False
 display_all_Q = True
 
 # Mask information
-mask_id = '1140'
+mask_id = '1065'
 filt = f'F{mask_id}C'
-mask = f'FQPM{mask_id}'
-pupil = 'MASKFQPM'
 
 # Set desired PSF size and oversampling
 # MIRI 4QPM: 24" x24" at 0.11 pixels, so 219x219 pixels
 # MIRISim synthetic datasets: 224 x 288
-fov_pix = 100 #256
+fov_pix = 100
 osamp = 2
-
+cropsize = 85
 
 # Observations structure and parameters
 if mask_id == '1065':
     pos_ang_list = [107.73513043, 117.36721388]            #deg, list of telescope V3 axis PA for each observation
     base_offset_list =[(0,0), (0,0)]                       #arcsec, list of nominal pointing offsets for each observation ((BaseX, BaseY) columns in .pointing file)
     dith_offsets_list = [[(0,0)], [(0,0)]]                 #arcsec, list of nominal dither offsets for each observation ((DithX, DithY) columns in .pointing file)
-    # point_error_list = [(-0.20, -1.17), (-0.12, -1.10)]   #pix, list of measured pointing errors for each observation (ErrX, ErrY)
-    point_error_list = [(-1.17, -0.20), (-1.10, -0.12)]   #pix, list of measured pointing errors for each observation (ErrX, ErrY)
+    # point_error_list = -np.array([(-0.20, -1.17), (-0.12, -1.10)])   #pix, list of measured pointing errors for each observation (ErrX, ErrY)
+    point_error_list = -np.array([(-1.17, -0.20), (-1.10, -0.12)])   #pix, list of measured pointing errors for each observation (ErrX, ErrY)
+    # point_error_list = -np.array([(0, 0), (0, 0)])
 
 elif mask_id == '1140':
     pos_ang_list = [107.7002475 , 117.34017049]            #deg
     base_offset_list =[(0,0), (0,0)]                       #arcsec
     dith_offsets_list = [[(0,0)], [(0,0)]]                 #arcsec
     # point_error_list = np.array([(0.12, 0.05), (0.07, -0.02)])      #pix
-    point_error_list = np.array([(0.05, 0.12), (-0.02, 0.07)])      #pix
+    point_error_list = -np.array([(0.05, 0.12), (-0.02, 0.07)])      #pix
 
 elif mask_id == '1550':
     pos_ang_list = [107.65929307, 117.31215657]            #deg
     base_offset_list =[(0,0), (0,0)]                       #arcsec
     dith_offsets_list = [[(0,0)], [(0,0)]]                 #arcsec
-    # point_error_list = [(0.26, 0.22), (0.14, 0.01)]       #pix
-    point_error_list = [(0.22, 0.26), (0.01, 0.14)]       #pix
+    # point_error_list = -np.array([(0.26, 0.22), (0.14, 0.01)])       #pix
+    point_error_list = -np.array([(0.22, 0.26), (0.01, 0.14)])       #pix
 
 n_obs = len(pos_ang_list)
 
@@ -638,9 +637,9 @@ disk_params = {
 path_MIRI_data = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_PROCESSED'
 miri_data_filename = 'HD141569_{}_v4_combined.fits'.format(filt)
 
-miri_data = fits.getdata(os.path.join(path_MIRI_data, miri_data_filename)) 
+miri_data_full = fits.getdata(os.path.join(path_MIRI_data, miri_data_filename)) 
 
-cropsize = miri_data.shape[0]
+miri_data = resize(miri_data_full, [cropsize,cropsize])
 
 
 
@@ -648,6 +647,8 @@ cropsize = miri_data.shape[0]
 
 
 # Initiate instrument class with selected filters, pupil mask, and image mask
+mask = f'FQPM{mask_id}'
+pupil = 'MASKFQPM'
 inst = webbpsf_ext.MIRI_ext(filter=filt, pupil_mask=pupil, image_mask=mask)
 
 # Set desired PSF size and oversampling
@@ -694,14 +695,15 @@ The outputs of MCFOST are fits files, and cannot be output variable like numpy a
 # param_file_init =  'HD141569_miri_3rings_mcfost_v3.para'
 
 
+path_model = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled_sept_2022/Model_Type4_inner_Ring'
 path_model = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled_sept_2022/Model_Pantin_inner_ring_v1'
-mcfost_model_file = 'data_11.40/RT.fits.gz'
+mcfost_model_file = 'data_15.50/RT.fits.gz'
 
 remove_central_star = True
 
 export_input_model = True
 export_folder = path_model
-export_fileName = 'HD141569_Model_tmp_F1140C.fits'
+export_fileName = 'HD141569_Model_tmp_{}.fits'.format(filt)
 
 
 input_file = os.path.join(path_model, mcfost_model_file)
@@ -738,16 +740,15 @@ if export_input_model:
 #packaging the output:
 disk_params = {
     'simulate': True,
-    # 'file': "/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled/HD141569_Model_Pantin_F1065C.fits",
-    # 'file': '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/1_Disk_Modeling/MIRI_Model_Oversampled_sept_2022/HD141569_Model_tmp_F1140C.fits',
-    # 'file': "./radmc_model/images/image_MIRI_FQPM_{}_{}.fits".format(target,10.575),
     'file': hdul_input_model,
-    'pixscale': pixscale_model, #0.027491, 
-    'wavelength': lbd, #11.4,
+    'pixscale': pixscale_model, 
+    'wavelength': lbd, 
     'units': 'Jy/pixel',
-    'dist' : 116,
+    'dist' : 111.6,
     'cen_star' : (not remove_central_star),
 }
+
+
 
 
 #%% Creating the MIRI combined disk image
@@ -838,26 +839,70 @@ t22 = time()
 print('Calculation time for {} obs combination: {}s'.format(n_obs, t22-t11))
 print('Total Calculation time for full disk image creation: {}s'.format(t22-t00))
 
-# sma = [0.397, 1.775, 3.29] 
+
+# ## Croping the images further to exclude the M stars in calculating the scaling coefficient and chi2
+# cropsize_new = 85
+# model_image_units_small = resize(model_image_units, [cropsize_new,cropsize_new])
+# miri_data_small = resize(miri_data, [cropsize_new,cropsize_new])
+
+scaling_coef = np.sum(miri_data**2)/np.sum(miri_data * model_image_units)
+model_image_scalled = scaling_coef*model_image_units
+diff_miri_minus_model = miri_data - model_image_scalled
+print(os.path.basename(path_model))
+print('Best Scaling coefficient: {}'.format(scaling_coef))
+print('chi2: {:.1f}'.format(np.sum(diff_miri_minus_model**2)))
+
+
+## Making the input disk model to the same sampling and size:
+sp_star = make_spec(**star_A_params)
+hdul_disk_model = image_manip.make_disk_image(inst, disk_params, sp_star=sp_star)
+disk_model_resized = pad_or_cut_to_size(hdul_disk_model[0].data, shape_new)
+disk_model_resampled = image_manip.frebin(disk_model_resized, scale=1/osamp) 
+disk_model_croped = resize(disk_model_resampled, [cropsize,cropsize])* pixscale**2
+
+
 vmax = 40
-fig7, ax7 = plt.subplots(1,3,figsize=(18,6), dpi=130)
+diffFrac = 0.1
+fig7, ax7 = plt.subplots(1,3,figsize=(15,6), dpi=130, constrained_layout=True)
 xsize_asec = cropsize * siaf_obs.XSciScale
 ysize_asec = cropsize * siaf_obs.YSciScale
 extent = [-1*xsize_asec/2, xsize_asec/2, -1*ysize_asec/2, ysize_asec/2]
-# im = ax7[0].imshow(input_model_Jy, norm=LogNorm(vmin=vmax/500, vmax=vmax))#, extent=extent)
-im = ax7[0].imshow(model_image_units, norm=LogNorm(vmin=vmax/500, vmax=vmax))#, extent=extent)
+# im = ax7[0].imshow(disk_model_croped,   norm=LogNorm(vmin=vmax/500, vmax=vmax, clip=True))#, extent=extent)
+im = ax7[0].imshow(model_image_scalled, norm=LogNorm(vmin=vmax/500, vmax=vmax))#, extent=extent)
 im = ax7[1].imshow(miri_data, norm=LogNorm(vmin=vmax/500, vmax=vmax))#, extent=extent)
 # im2 = ax7[2].imshow(miri_data - model_image_units, norm=LogNorm(vmin=vmax/500, vmax=vmax))#, extent=extent)
-im2 = ax7[2].imshow(miri_data - model_image_units, vmin=-vmax/5, vmax=vmax/10)#, extent=extent)
+im2 = ax7[2].imshow(diff_miri_minus_model, vmin=-vmax*diffFrac, vmax=vmax*diffFrac, cmap='RdBu_r')#, extent=extent)
 # im = ax7.imshow(combined_image, vmin=vmin_lin, vmax=vmax)
 # ax7.set_xlabel('RA offset (arcsec)')
 # ax7.set_ylabel('Dec offset (arcsec)')
 # plotAxes(ax7, position=(0.95,0.35), label1='E', label2='N')
-ax7[0].set_title('COMBINED HD141569 MODEL '+filt)
+# ax7[0].set_title('INPUT HD141569 MODEL '+filt)
+ax7[0].set_title('CONVOLEVED HD141569 MODEL '+filt)
 ax7[1].set_title('OBSERVED HD141569 IMAGE '+filt)
 ax7[2].set_title('Difference '+filt)
 plt.tight_layout()
-cbar = fig7.colorbar(im, ax=ax7)
+cbar = fig7.colorbar(im, ax=ax7[0:-1], location='bottom')
 cbar.ax.set_title('mJy.arcsec$^{-2}$')
+cbar2 = fig7.colorbar(im2, ax=ax7[-1], location='bottom')
+cbar2.ax.set_title('mJy.arcsec$^{-2}$')
 plt.show()
 
+
+# fig8, ax8 = plt.subplots(1,1,figsize=(8,6), dpi=130)
+# xvals = (np.arange(cropsize)-cropsize//2+1)*pixscale
+# ax8.plot(xvals, disk_model_croped[:,cropsize//2-1]) 
+# ax8.plot(xvals, disk_model_croped_type1[:,cropsize//2-1]) 
+# ax8.set_xlim([-0.6,0.6])
+# ax8.set_ylim([-100,5000])
+# ax8.set_ylabel('Surface brightness (mJy/as^2)')
+# ax8.set_xlabel('delta Dec (arcsec)')
+# plt.show()
+
+
+# fig9, ax9 = plt.subplots(1,1,figsize=(8,6), dpi=130)
+# xvals = (np.arange(cropsize)-cropsize//2+1)*pixscale
+# ax9.plot(xvals, disk_model_croped[cropsize//2-1,:]) 
+# ax9.plot(xvals, disk_model_croped_type1[cropsize//2-1,:]) 
+# ax9.set_xlim([-0.6,0.6])
+# ax9.set_ylim([-100,5000])
+# plt.show()
