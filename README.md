@@ -6,7 +6,7 @@ It contains two files:
 - HD141569_MIRI_Data_analysis.py : this is the dedicated code to process the MIRI data for HD 141569. It contains basic steps to process the data starting from JWST pipeline Stage 2 outputs.
 - mirisim_disk_model.py : this is a code to create MIRI disk models, to be use for (forward) modeling analyses.
 
-SETTING UP
+SETTING UP:
 It is recommended to set up a dedicated conda environment for this work.
 - Install the dev veersions  of webbpsf_ext, webbpsf, poppy:
 
