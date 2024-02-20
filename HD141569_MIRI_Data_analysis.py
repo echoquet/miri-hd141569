@@ -13,6 +13,7 @@ import scipy.ndimage as ndimage
 from scipy.optimize import minimize
 from copy import deepcopy
 from astropy.io import fits
+import pandas as pd
 from photutils.centroids import centroid_sources, centroid_com, centroid_quadratic,centroid_2dg, centroid_1dg
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
@@ -284,13 +285,13 @@ def resize(cube1, dim2, cent=[None,None]):
 
 
 
-def import_data_cube_from_files(file_list, scaling_list=None):
-    tmp = fits.getdata(file_list[0])
+def import_data_cube_from_files(file_list, scaling_list=None, ext=None, extname=None):
+    tmp = fits.getdata(file_list[0], ext=None, extname=None)
     data_cube = np.zeros(np.shape(file_list) + np.shape(tmp))
     if scaling_list is None:
         scaling_list = np.ones(len(file_list))
     for i, file in enumerate(file_list):
-        data_cube[i] = fits.getdata(file) * scaling_list[i]
+        data_cube[i] = fits.getdata(file, ext=ext, extname=extname) * scaling_list[i]
     return data_cube
 
 
@@ -351,6 +352,21 @@ def median_filter_cube(cube, box_half_size, threshold, iter_max=10000, verbose=T
     if verbose:
         print('Number of iterations: {}'.format(it))
     return cube_filtered
+
+
+def clean_bad_pixel_list(cube, bad_pixel_coords, method='zeros'):
+    dims = np.shape(cube)
+
+    # for i, inds in enumerate(nan_poses):
+    #     cal2_sci_cube_bck_sub[inds[0], inds[1], inds[2], inds[3]] = 0
+
+    cube_clean = deepcopy(cube)
+    for coords in bad_pixel_coords:
+        cube_clean[tuple(coords)] = 0
+    
+    return cube_clean
+
+
 
 
 def display_grid_of_images_from_cube(cube, vmax, suptitle='', imtitle_array=None, logNorm=True, 
@@ -415,7 +431,7 @@ base_root = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-
 targname_sci = 'HD 141569'
 targname_ref = 'HD 140986'
 targname_bck = ''
-filt = 'F1550C'
+filt = 'F1065C'
 
 #%% TARGET ACQ FILES
 print('\n##### PROCESSING THE TARGET ACQUISITION FILES ### ')
@@ -430,6 +446,12 @@ vmax_ta= 10
 # Parameters for frame selection:
 discard_ta_filename = np.array(['jw01386020001_02101_00001_mirimage_cal.fits',
                                 'jw01386023001_02101_00001_mirimage_cal.fits'])
+
+## Parameters for bad pixel cleaning:
+median_filt_thresh = 3 #sigma
+median_filt_box_size = 2
+median_filt_iter_max = 200
+
 
 ## Parameters for background subtraction:
 rIn_mask_A = 19
@@ -457,6 +479,7 @@ centroid_box_size_ta = 9
 centroid_method_ta = centroid_2dg #centroid_sources, centroid_com, centroid_quadratic,centroid_2dg, centroid_1dg
 
 ## Parameters for saving the data
+export_centroid_coordinates = True
 export_combined_ta = True
 overWriteTAQ = True
 combined_ta_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_TA_combined'
@@ -474,8 +497,6 @@ targname_all_TA_list = import_keyword_from_files(all_TA_files, 'TARGNAME', exten
 filt_all_TA_list = import_keyword_from_files(all_TA_files, 'FILTER', extension=0)
 
 
-
-
 # Note: there is only one Filter for the TA. 
 # Use the filename or Obs ID to select files by coronagraphic filter
 selected_TA_sci_indices = (targname_all_TA_list == targname_sci)
@@ -489,7 +510,7 @@ print('Number of selected REF-TA files: {}'.format(len(selected_TA_ref_files)))
 print('Filter Name: {}'.format(np.unique(filt_all_TA_list)))
 
 
-##### Import the TA data:
+##### Import the TA data (REF and SCI):
 # Note: the TA cal is not flux calibrated. 
 # The files are in DN/s and there is no photometric keyword.
 target_acq_ref_cube = import_data_cube_from_files(selected_TA_ref_files)
@@ -507,7 +528,7 @@ dims_ta = np.shape(target_acq_sci_cube)[1:]
 
 
 
-##### Discarding frames with sources on the 4QPM edges:
+##### Discarding frames with sources on the 4QPM edges (SCI):
 print('\nDiscarding {} SCI-TA files: \n{}'.format(len(discard_ta_filename), discard_ta_filename))
 discard_ta_flag = np.isin(selected_TA_sci_filenames, discard_ta_filename)
 n_sci_ta_cent = n_sci_ta - len(discard_ta_filename)
@@ -515,10 +536,18 @@ target_acq_sci_cube_selec = target_acq_sci_cube[~discard_ta_flag]
 selected_TA_sci_PA_V3_cent = selected_TA_sci_PA_V3[~discard_ta_flag]
 
 
-#### Estimate the background frame from the median image:
-print('\nBAckground subtraction')
+##### Clean the data from bad pixels with median filter (REF and SCI):
+print('\nClean bad pixels (REF and SCI TAs)')
+target_acq_ref_cube_clean = median_filter_cube(target_acq_ref_cube, median_filt_box_size, median_filt_thresh, 
+                                               iter_max=median_filt_iter_max, verbose=False)
+target_acq_sci_cube_clean = median_filter_cube(target_acq_sci_cube_selec, median_filt_box_size, median_filt_thresh, 
+                                               iter_max=median_filt_iter_max, verbose=False)
 
-target_acq_ref_cube_masked = deepcopy(target_acq_ref_cube)
+
+
+#### Estimate the background frame from the median image (REF and SCI):
+print('\nBAckground subtraction (REF and SCI TAs)')
+target_acq_ref_cube_masked = deepcopy(target_acq_ref_cube_clean)
 for i in range(n_ref_ta):
     mask_ta_ref_stars = np.ones(dims_ta, dtype=bool) 
     mask_ta_ref_stars *= create_mask(rIn_mask_BC, dims_ta, cent=[rough_ta_ypos_REF[i], rough_ta_xpos_REF[i]])
@@ -533,7 +562,7 @@ cbar = fig6.colorbar(im, ax=ax6)
 cbar.ax.set_title('DN/s$')
 plt.show()
 
-target_acq_sci_cube_masked = deepcopy(target_acq_sci_cube_selec)
+target_acq_sci_cube_masked = deepcopy(target_acq_sci_cube_clean)
 for i in range(n_sci_ta_cent):
     mask_ta_sci_stars = np.ones(dims_ta, dtype=bool) 
     mask_ta_sci_stars *= create_mask(rIn_mask_A, dims_ta, cent=[rough_ta_ypos_ABC[i,0], rough_ta_xpos_ABC[i,0]])
@@ -570,6 +599,13 @@ for i, image_ta in enumerate(target_acq_sci_cube_clean):
     fine_ta_xpos_ABC[i,:] = x
     fine_ta_ypos_ABC[i,:] = y
 
+if export_centroid_coordinates:
+    fine_ta_coords_ABC = np.concatenate((fine_ta_xpos_ABC,fine_ta_ypos_ABC), axis=1)
+    TA_sci_filenames = selected_TA_sci_filenames[~discard_ta_flag]
+    data_ta = np.concatenate((TA_sci_filenames.reshape(len(TA_sci_filenames),1),fine_ta_coords_ABC),axis=1)
+    labels_table = ['Filename', 'X coord Star A','X coord Star B','X coord Star C', 'Y coord Star A','Y coord Star B','Y coord Star C']
+    df = pd.DataFrame(data=data_ta, columns=labels_table)
+    df.to_csv(os.path.join(path_target_acq_data, 'Centroid_Position_StarsABC.csv'))
 
 vmax_ta_list = [400,25,25]
 zoom_size = 15
@@ -678,7 +714,7 @@ plt.show()
 
 ###### Registering the images using the B coordinates:
 print('\nRegister, derotate, and combine the SCI TA frames:')
-central_star_index = 0
+central_star_index = 1
 center_ta_images = (np.array(target_acq_sci_cube_clean.shape[1:])-1)//2
 target_acq_sci_cube_centered_derotated = np.empty(np.shape(target_acq_sci_cube_clean))
 for i, ta_image in enumerate (target_acq_sci_cube_clean):
@@ -701,6 +737,20 @@ plt.tight_layout()
 cbar = fig7.colorbar(im, ax=ax7)
 cbar.ax.set_title('DN/s$')
 plt.show()
+
+vmax_ta3 = 500
+fig71, ax71 = plt.subplots(1,1,figsize=(8,6), dpi=130)
+# im = ax7.imshow(target_acq_sci_cube_combined, norm=LogNorm(vmin=vmax_ta2/1000, vmax=vmax_ta2))
+im = ax71.imshow(target_acq_sci_cube_combined, vmin=0, vmax=vmax_ta3)
+ax71.set_title('COMBINED HD141569 TA frames')
+ax71.set_xlim([82, 103])
+ax71.set_ylim([55, 76])
+plt.tight_layout()
+cbar = fig71.colorbar(im, ax=ax71)
+cbar.ax.set_title('DN/s$')
+plt.show()
+
+
 
 coords_B_round = [int(np.round(center_ta_images[0]-best_dec_A_from_ref[0]/pixsize)),
                   int(np.round(center_ta_images[1]+best_ra_A_from_ref[0]/pixsize))]
@@ -942,6 +992,14 @@ if data_type == '*_calints.fits':
 
 #number of extensions: 
 #len(fits.open(cal2_sci_files[0]))
+# SCI
+# ERR
+# DQ
+# INT_TIMES
+# VAR_POISSON
+# VAR_RNOISE
+# VAR_FLAT
+# ASDF
 
 
 if filt == 'F1065C':
@@ -962,13 +1020,16 @@ PA_V3_sci = ROLL_REF_sci + V3I_YANG_sci
 phot_MJySr_sci = import_keyword_from_files(cal2_sci_files, 'PHOTMJSR', extension=1)
 phot_uJyA2_sci = import_keyword_from_files(cal2_sci_files, 'PHOTUJA2', extension=1)
 scaling_values = phot_uJyA2_sci/(1000*phot_MJySr_sci)
+
 cal2_sci_cube = import_data_cube_from_files(cal2_sci_files, scaling_list=scaling_values)
+cal2_sci_cube_err = import_data_cube_from_files(cal2_sci_files, scaling_list=scaling_values, extname='ERR')
 dims = (np.shape(cal2_sci_cube))[-2:]
 n_sci_files = len(cal2_sci_files)
 n_sci_int_all = (np.shape(cal2_sci_cube))[1]
 print('Number of exposures: {}'.format(n_sci_files))
 print('Number of integrations: {}'.format(n_sci_int_all))
 print('Number of rolls: {}'.format(len(np.unique(PA_V3_sci))))
+print('Rolls" {}'.format(np.unique(PA_V3_sci)))
 print('Roll angles" {}'.format(np.diff(np.unique(PA_V3_sci))))
 print('Image dimensions: {}'.format(dims))
 
@@ -986,7 +1047,9 @@ PA_V3_ref = ROLL_REF_ref + V3I_YANG_ref
 phot_MJySr_ref = import_keyword_from_files(cal2_ref_files, 'PHOTMJSR', extension=1)
 phot_uJyA2_ref = import_keyword_from_files(cal2_ref_files, 'PHOTUJA2', extension=1)
 scaling_values_ref = phot_uJyA2_ref/(1000*phot_MJySr_ref)
+
 cal2_ref_cube = import_data_cube_from_files(cal2_ref_files, scaling_list=scaling_values_ref)
+cal2_ref_cube_err = import_data_cube_from_files(cal2_ref_files, scaling_list=scaling_values_ref, extname='ERR')
 n_ref_files = len(cal2_ref_cube)
 n_ref_int_all = (np.shape(cal2_ref_cube))[1]
 print('Number of exposures: {}'.format(n_ref_files))
@@ -1003,7 +1066,9 @@ print('##### BACKGROUND FIELD SCI : #####')
 phot_MJySr_bck_sci = import_keyword_from_files(cal2_bck_sci_files, 'PHOTMJSR', extension=1)
 phot_uJyA2_bck_sci = import_keyword_from_files(cal2_bck_sci_files, 'PHOTUJA2', extension=1)
 scaling_values_bck_sci = phot_uJyA2_bck_sci/(1000*phot_MJySr_bck_sci)
+
 cal2_bck_sci_cube = import_data_cube_from_files(cal2_bck_sci_files, scaling_list=scaling_values_bck_sci)
+cal2_bck_sci_cube_err = import_data_cube_from_files(cal2_bck_sci_files, scaling_list=scaling_values_bck_sci, extname='ERR')
 n_bck_sci_files = len(cal2_bck_sci_cube)
 n_bck_sci_int_all = (np.shape(cal2_bck_sci_cube))[1]
 print('Number of exposures: {}'.format(n_bck_sci_files))
@@ -1017,7 +1082,9 @@ print('##### BACKGROUND FIELD REF : #####')
 phot_MJySr_bck_ref = import_keyword_from_files(cal2_bck_ref_files, 'PHOTMJSR', extension=1)
 phot_uJyA2_bck_ref = import_keyword_from_files(cal2_bck_ref_files, 'PHOTUJA2', extension=1)
 scaling_values_bck_ref = phot_uJyA2_bck_ref/(1000*phot_MJySr_bck_ref)
+
 cal2_bck_ref_cube = import_data_cube_from_files(cal2_bck_ref_files, scaling_list=scaling_values_bck_ref)
+cal2_bck_ref_cube_err = import_data_cube_from_files(cal2_bck_ref_files, scaling_list=scaling_values_bck_ref, extname='ERR')
 n_bck_ref_files = len(cal2_bck_ref_cube)
 n_bck_ref_int_all = (np.shape(cal2_bck_ref_cube))[1]
 print('Number of exposures: {}'.format(n_bck_ref_files))
@@ -1103,7 +1170,7 @@ saveCombinedImageQ = False
 overWriteQ = True
 save_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_PROCESSED'
 
-basename_sci = 'HD141569_'+filt+'_v3'
+basename_sci = 'HD141569_'+filt+'_v4'
 filename_output = basename_sci + '_combined.fits'
 
 
@@ -1116,7 +1183,7 @@ filename_output = basename_sci + '_combined.fits'
 
 
 
-#****** Cleaning the bad pixels  ******
+#****** Discarding the first integration of each observations  ******
 if discard_first_ints: print('--- Discarding the first integrations ---')
 init_int = 1 if discard_first_ints else 0
 n_sci_int = n_sci_int_all - 1 if discard_first_ints else n_sci_int_all
@@ -1129,15 +1196,23 @@ n_bck_ref_int = n_bck_ref_int_all - 1 if discard_first_ints else n_bck_ref_int_a
 print('\n--- Cleaning the data from bad pixels ---')
 # NOTE: consider using the DQ maps too
 
-cal2_sci_cube_clean = median_filter_cube(cal2_sci_cube[:, init_int:], median_filt_box_size, median_filt_thresh, 
+cal2_sci_cube_clean1 = median_filter_cube(cal2_sci_cube[:, init_int:], median_filt_box_size, median_filt_thresh, 
                                         iter_max=median_filt_iter_max, verbose=verbose)
-cal2_ref_cube_clean = median_filter_cube(cal2_ref_cube[:, init_int:], median_filt_box_size, median_filt_thresh, 
+cal2_ref_cube_clean1 = median_filter_cube(cal2_ref_cube[:, init_int:], median_filt_box_size, median_filt_thresh, 
                                         iter_max=median_filt_iter_max, verbose=verbose)
 
-cal2_bck_sci_cube_clean = median_filter_cube(cal2_bck_sci_cube[:, init_int:], median_filt_box_size, median_filt_thresh, 
+cal2_bck_sci_cube_clean1 = median_filter_cube(cal2_bck_sci_cube[:, init_int:], median_filt_box_size, median_filt_thresh, 
                                         iter_max=median_filt_iter_max, verbose=verbose)
-cal2_bck_ref_cube_clean = median_filter_cube(cal2_bck_ref_cube[:, init_int:], median_filt_box_size, median_filt_thresh, 
+cal2_bck_ref_cube_clean1 = median_filter_cube(cal2_bck_ref_cube[:, init_int:], median_filt_box_size, median_filt_thresh, 
                                         iter_max=median_filt_iter_max, verbose=verbose)
+
+# Patch to remove nan values (as other bad pixels)
+# TODO: replace this by a more general use of the Data Quality map.
+# Current version puts the pixels to zero. add the option to put median value of neighbors
+cal2_sci_cube_clean = clean_bad_pixel_list(cal2_sci_cube_clean1, np.argwhere(np.isnan(cal2_sci_cube_clean1)))
+cal2_ref_cube_clean = clean_bad_pixel_list(cal2_ref_cube_clean1, np.argwhere(np.isnan(cal2_ref_cube_clean1)))
+cal2_bck_sci_cube_clean = clean_bad_pixel_list(cal2_bck_sci_cube_clean1, np.argwhere(np.isnan(cal2_bck_sci_cube_clean1)))
+cal2_bck_ref_cube_clean = clean_bad_pixel_list(cal2_bck_ref_cube_clean1, np.argwhere(np.isnan(cal2_bck_ref_cube_clean1)))
 
 
 #****** Background subtraction  ******
@@ -1236,6 +1311,15 @@ for i in range(n_sci_files):
         fine_xpos_BC[i,j,:] = x
         fine_ypos_BC[i,j,:] = y
 
+    if export_centroid_coordinates:
+        filename = os.path.basename(cal2_sci_files[i])
+        fine_sci_coords_BC = np.concatenate((fine_xpos_BC[i],fine_ypos_BC[i]), axis=1)
+        labels_table = ['X coord Star B','X coord Star C', 'Y coord Star B','Y coord Star C']
+        df = pd.DataFrame(data=fine_sci_coords_BC, columns=labels_table)
+        df.to_csv(os.path.join(path_cal2_data, 'Centroid_Position_StarsBC_{}.csv'.format(filename)))
+
+
+
 if display_all:
     labelStars = ['B star', 'C star']
     fig1, ax1 = plt.subplots(2,n_sci_files,figsize=(4*n_sci_files, 4*2), dpi=130)
@@ -1263,42 +1347,51 @@ print('    -- Pointing stability from B / X-axis: std < {:.5f} pix'.format(np.ma
 print('    -- Pointing stability from B / Y-axis: std < {:.5f} pix'.format(np.max(np.std(fine_ypos_BC[:,:,0], axis=1))))
 
 
-# Patch to remove nan values
-nan_poses = np.argwhere(np.isnan(cal2_sci_cube_bck_sub))
-for i, inds in enumerate(nan_poses):
-    cal2_sci_cube_bck_sub[inds[0], inds[1], inds[2], inds[3]] = 0
+# Patch to remove nan values before interpolating the data
+# nan_poses = np.argwhere(np.isnan(cal2_sci_cube_bck_sub))
+# for i, inds in enumerate(nan_poses):
+#     cal2_sci_cube_bck_sub[inds[0], inds[1], inds[2], inds[3]] = 0
     
 print('    Register the SCI frames:')
-im_center = fqpm_center #(np.array(dims)-1)//2
+# Shifting the SCI images in order to place the star center at the center of the FOV
+im_center = (np.array(dims)-1)//2   #fqpm_center #(np.array(dims)-1)//2
 pointing_error_list = np.empty((n_sci_files, n_sci_int, 2))
 cal2_sci_cube_centered = np.empty(np.shape(cal2_sci_cube_bck_sub))
 for i in range(n_sci_files):
     for j in range(n_sci_int):
         estimated_xpos_A = fine_xpos_BC[i,j,0] - best_sep_A_from_ref[0] * np.sin((best_pa_A_from_ref[0] - PA_V3_sci[i])*np.pi/180)/pixsize 
         estimated_ypos_A = fine_ypos_BC[i,j,0] + best_sep_A_from_ref[0] * np.cos((best_pa_A_from_ref[0] - PA_V3_sci[i])*np.pi/180)/pixsize 
+        pointing_error_list[i, j] = np.array([estimated_xpos_A - fqpm_center[1], estimated_ypos_A - fqpm_center[0]])
         message = '    -- Roll {}, int {}, star A : x = {:.3f}  y = {:.3f}    /   Error from 4qpm center: x_err = {:.3f}  y_err = {:.3f}'
         print(message.format(i, j, estimated_xpos_A, estimated_ypos_A, estimated_xpos_A-fqpm_center[1], estimated_ypos_A-fqpm_center[0]))
+        
         shift_values = np.array([estimated_xpos_A - im_center[1], estimated_ypos_A - im_center[0]])
         cal2_sci_cube_centered[i,j] = shift_interp(cal2_sci_cube_bck_sub[i,j], -shift_values)
-        pointing_error_list[i, j] = shift_values
         
 pointing_error_means = np.mean(pointing_error_list, axis=1)
 print('    -- Mean Pointing Error of A / X-axis: ROll 1: {:.3f} - ROll 2: {:.3f} pix'.format(pointing_error_means[0,0], pointing_error_means[1,0]))
 print('    -- Mean Pointing Error of A / Y-axis: ROll 1: {:.3f} - ROll 2: {:.3f} pix'.format(pointing_error_means[0,1], pointing_error_means[1,1]))
 
 
-
 display_grid_of_images_from_cube(cal2_sci_cube_centered,  vmax/3,# logNorm=False,
                                  suptitle='Centered Integrations HD141569  '+filt)
 
 
-
+print('    Register the REF frame on the same reference pixel')
+# Shifting the reference star at the center of the FOV, like the SCI frames
+# here we assume that the REF images are well centered on the fqpm_center, with no error.
+# this can be refined with cross-correlation, or retrieving the dither offsets
 # TODO: Register the REF frames, because of small grid dither
+cal2_ref_cube_centered = np.empty(np.shape(cal2_ref_cube_bck_sub))
+for i in range(n_ref_files):
+    for j in range(n_ref_int):
+        shift_values = np.array([fqpm_center[1] - im_center[1], fqpm_center[0] - im_center[0]])
+        cal2_ref_cube_centered[i,j] = shift_interp(cal2_ref_cube_bck_sub[i,j], -shift_values)
+        
 
 
-
-star_center_sci = fqpm_center
-star_center_ref = fqpm_center
+star_center_sci = im_center
+star_center_ref = im_center
 
 
 
@@ -1308,8 +1401,21 @@ star_center_ref = fqpm_center
 if psf_subtraction_method == 'No-Subtraction':
     cal2_sci_cube_psf_sub = cal2_sci_cube_centered
 elif psf_subtraction_method =='classical-Ref-Averaged':
-    ref_average = sci_ref_th_ratio * np.mean(cal2_ref_cube_bck_sub, axis=(0,1))
+    ref_average = sci_ref_th_ratio * np.mean(cal2_ref_cube_centered, axis=(0,1))
     cal2_sci_cube_psf_sub = cal2_sci_cube_centered - np.tile(ref_average, (n_sci_files, n_sci_int, 1, 1))
+
+if display_all:
+    vmax = 35 #3 #max_val*0.7
+    fig9, ax9 = plt.subplots(1,2,figsize=(10,6), dpi=130)
+    im = ax9[0].imshow(cal2_sci_cube_centered[0,0], norm=LogNorm(vmin=vmax/500, vmax=vmax))
+    im = ax9[1].imshow(ref_average, norm=LogNorm(vmin=vmax/500, vmax=vmax))
+    # im = ax7.imshow(combined_image, vmin=vmin_lin, vmax=vmax)
+    ax9[0].set_title('HD141569  '+filt)
+    ax9[1].set_title('Reference scaled  '+filt)
+    plt.tight_layout()
+    cbar = fig9.colorbar(im, ax=ax9)
+    cbar.ax.set_title('mJy.arcsec$^{-2}$')
+    plt.show()
 
 
 
@@ -1318,9 +1424,9 @@ print('--- Combining integrations within rolls ---')
 combined_roll_images = np.mean(cal2_sci_cube_psf_sub, axis=1)
 
 # Patch to remove nan values
-nan_poses = np.argwhere(np.isnan(combined_roll_images))
-for i, inds in enumerate(nan_poses):
-    combined_roll_images[inds[0], inds[1], inds[2]] = 0
+# nan_poses = np.argwhere(np.isnan(combined_roll_images))
+# for i, inds in enumerate(nan_poses):
+#     combined_roll_images[inds[0], inds[1], inds[2]] = 0
 
 display_grid_of_images_from_cube(combined_roll_images, vmax, #logNorm=False,
                                  suptitle='ROLLS HD141569  '+filt,imsize=4)
@@ -1338,7 +1444,7 @@ for i in range(n_sci_files):
 if mask_4qpm_Q:
     fqpm_masks = np.empty((n_sci_files, dims[0], dims[1]), dtype=bool)
     for i, roll_angle in enumerate(PA_V3_sci):
-        fqpm_masks[i] = create_fqpm_mask(dims, np.round(fqpm_center).astype(int), fqpm_width, fqpm_angle-roll_angle)
+        fqpm_masks[i] = create_fqpm_mask(dims, im_center, fqpm_width, fqpm_angle-roll_angle)
     derotated_images[~fqpm_masks] = np.nan
 
 display_grid_of_images_from_cube(derotated_images, vmax, #logNorm=False,
@@ -1379,3 +1485,57 @@ if saveCombinedImageQ:
     
     hdul.writeto(os.path.join(path_output, filename_output), overwrite=overWriteQ)
 
+
+
+
+#%% Analyze images
+
+save_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_PROCESSED'
+
+filt_list = ['F1065C', 'F1140C', 'F1550C']
+basename_sci = 'HD141569_'+filt+'_v4'
+filename_output = basename_sci + '_combined.fits'
+
+
+path_output = os.path.join(base_root, save_folder)
+
+combined_image_F1065C = fits.getdata(os.path.join(path_output, 'HD141569_F1065C_v4_combined.fits'))
+combined_image_F1140C = fits.getdata(os.path.join(path_output, 'HD141569_F1140C_v4_combined.fits'))
+combined_image_F1550C = fits.getdata(os.path.join(path_output, 'HD141569_F1550C_v4_combined.fits'))
+
+
+vmax = 15 #3 #max_val*0.7
+fig12, ax12 = plt.subplots(1,3,figsize=(6,18), dpi=130)
+im1 = ax12[0].imshow(combined_image_F1065C, norm=LogNorm(vmin=vmax/500, vmax=vmax))#, cmap='bone')
+im2 = ax12[1].imshow(combined_image_F1140C, norm=LogNorm(vmin=vmax/500, vmax=vmax))#, cmap='pink')
+im3 = ax12[2].imshow(combined_image_F1550C, norm=LogNorm(vmin=vmax/500, vmax=vmax))#, cmap='gist_heat')
+ax12[0].set_title('F1065C')
+ax12[1].set_title('F1140C')
+ax12[2].set_title('F1550C')
+plt.tight_layout()
+# cbar = fig12.colorbar(im, ax=ax12[0])
+# cbar.ax.set_title('mJy.arcsec$^{-2}$')
+plt.show()
+
+
+
+vmax = 15 #3 #max_val*0.7
+fig7, ax7 = plt.subplots(1,1,figsize=(8,6), dpi=130)
+im = ax7.imshow(combined_image_F1140C - combined_image_F1065C, norm=LogNorm(vmin=vmax/500, vmax=vmax))
+# im = ax7.imshow(combined_image_F1140C - combined_image_F1065C, vmin=vmin_lin, vmax=vmax)
+ax7.set_title('F1140C - F1065C  ')
+plt.tight_layout()
+cbar = fig7.colorbar(im, ax=ax7)
+cbar.ax.set_title('mJy.arcsec$^{-2}$')
+plt.show()
+
+
+vmax = 15 #3 #max_val*0.7
+fig7, ax7 = plt.subplots(1,1,figsize=(8,6), dpi=130)
+im = ax7.imshow(combined_image_F1550C - combined_image_F1140C, norm=LogNorm(vmin=vmax/500, vmax=vmax))
+# im = ax7.imshow(combined_image_F1140C - combined_image_F1065C, vmin=vmin_lin, vmax=vmax)
+ax7.set_title('F1550C - F1140C  ')
+plt.tight_layout()
+cbar = fig7.colorbar(im, ax=ax7)
+cbar.ax.set_title('mJy.arcsec$^{-2}$')
+plt.show()
