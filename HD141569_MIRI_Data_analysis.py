@@ -10,6 +10,9 @@ from glob import glob
 import numpy as np
 # from skimage.transform import rotate
 import scipy.ndimage as ndimage
+
+from imtoolbox import *
+
 from scipy.optimize import minimize
 from copy import deepcopy
 from astropy.io import fits
@@ -21,268 +24,10 @@ plt.rcParams['image.origin'] = 'lower'
 plt.rcParams["image.cmap"] = 'gist_heat'#'hot'#'copper'
 
 #%% FUNCTIONS
-def create_mask(rIn, dims, cent=None, polar_system=False, rOut=float('inf')):
-    """ Creates a boolean frame with the pixels outside rIn at True.
-    
-    Parameters
-    ----------
-    rIn : the inner radius of the mask in pixels.
-    dims : the shape of the output array (pix, pix).
-    cent : (optional) the coordinates of the mask. Default is the frame center.
-    system : (optional) 'cartesian' or 'polar' system for the center coordinates. Default is cartesian.
-    rOut : (optional) the outer radius of the mask in pixels
-    
-    Returns
-    -------
-    mask : 2D Array of booleans, True outside rIn, False inside.
-        
-    """
-    if len(dims) != 2:
-        raise TypeError('dims should be tuple of 2 elements')
-    im_center = (np.array(dims)-1) / 2 #minus 1 because of difference between length and indexation
-    
-    if cent is None:
-        center = im_center
-    else:
-        if polar_system:
-            phi = cent[1] *np.pi/180
-            center = [cent[0] * np.cos(phi), -cent[0] * np.sin(phi)] # + im_center
-        else:
-            center = cent 
-            
-    y, x = np.indices(dims)
-    rads = np.sqrt((y-center[0])**2+(x-center[1])**2)
-    mask = (rOut > rads) & (rads >= rIn)
-    return mask
-
-
-def create_elliptical_annulus(rIn, rOut, inc, pa, shape, cent=None):
-    """ Creates a boolean frame with the pixels within rIn and rOut at True.
-    
-    Parameters
-    ----------
-    rIn : the inner radius of the annulus in pixels.
-    rOut : the outer radius of the annulus in pixels.
-    inc: inclination in degrees to compute the minor axis.
-    pa: orientation in degrees of the ellipse.
-    shape : the shape of the output array (pix, pix).
-    cent : coordinates of the center  (y0, x0)
-        
-    Returns
-    -------
-    mask : 2D Array of booleans, True within rIn and rOut, False outside.
-        
-    """
-    if len(shape) != 2:
-        raise TypeError('Shape should be tuple of 2 elements')
-        
-    if cent is None:
-        cent = (np.array(shape)-1) / 2
-        
-    y, x = np.indices(shape)
-    dx = (x-cent[1])
-    dy = (y-cent[0])
-    
-    pa_rad = pa*np.pi/180
-    dx_rot = (dx*np.cos(pa_rad) + dy*np.sin(pa_rad))/np.cos(inc*np.pi/180)
-    dy_rot = -dx*np.sin(pa_rad) + dy*np.cos(pa_rad)
-    
-    
-    rads = np.sqrt(dx_rot**2 + dy_rot**2)
-    mask = (rOut > rads) & (rads >= rIn)
-    return mask
-
-
-def create_box_mask(dims, center, box_sizes):
-    square_mask = np.ones(dims)
-    
-    y1i, y1f = resize_list_limits(dims[0], box_sizes[0], cent1=center[0])
-    x1i, x1f = resize_list_limits(dims[1], box_sizes[1], cent1=center[1])
-    
-    square_mask[y1i:y1f, x1i:x1f] *= 0 
-    
-    return square_mask.astype(bool)
-
-
-def create_fqpm_mask(dims, center, width, angle):
-    fqpm_mask_tmp = np.ones(dims)
-    fqpm_mask_tmp[center[0] - width//2 : center[0] + width//2, :] = 0
-    fqpm_mask_tmp[:, center[1] - width//2 : center[1] + width//2] = 0
-    fqpm_mask = np.round(frame_rotate_interp(fqpm_mask_tmp, angle, center=center, cval=1))
-    return fqpm_mask.astype(bool)
-
-
-def create_saber_mask(dims, center, width, angle):
-    saber_mask_tmp = np.ones(dims)
-    saber_mask_tmp[center[0] - width//2 : center[0] + width//2, :] = 0
-    # saber_mask_tmp[:, center[1] - width//2 : center[1] + width//2] =1
-    saber_mask = np.round(frame_rotate_interp(saber_mask_tmp, angle, center=center, cval=1))
-    return saber_mask.astype(bool)
-
-
-### DEPRECATED
-# def frame_rotate(array, angle, rot_center=None, interp_order=4, border_mode='constant'):
-#     """ Rotates a frame or 2D array.
-    
-#     Parameters
-#     ----------
-#     array : Input image, 2d array.
-#     angle : Rotation angle.
-#     rot_center : Coordinates X,Y  of the point with respect to which the rotation will be 
-#                 performed. By default the rotation is done with respect to the center 
-#                 of the frame; central pixel if frame has odd size.
-#     interp_order: Interpolation order for the rotation. See skimage rotate function.
-#     border_mode : Pixel extrapolation method for handling the borders. 
-#                 See skimage rotate function.
-        
-#     Returns
-#     -------
-#     array_out : Resulting frame.
-        
-#     """
-#     if array.ndim != 2:
-#         raise TypeError('Input array is not a frame or 2d array')
-
-#     min_val = np.nanmin(array)
-#     im_temp = array - min_val
-#     max_val = np.nanmax(im_temp)
-#     im_temp /= max_val
-
-#     array_out = rotate(im_temp, angle, order=interp_order, center=rot_center, 
-#                         cval=np.nan, mode=border_mode)
-
-#     array_out *= max_val
-#     array_out += min_val
-#     array_out = np.nan_to_num(array_out)
-             
-#     return array_out
-
-
-
-def frame_rotate_interp(array, angle, center=None, mode='constant', cval=0, order=3):
-    ''' Rotates a frame or 2D array.
-        
-        Parameters
-        ----------
-        array : Input image, 2d array.
-        angle : Rotation angle (deg).
-        center : Coordinates X,Y  of the point with respect to which the rotation will be 
-                    performed. By default the rotation is done with respect to the center 
-                    of the frame; central pixel if frame has odd size.
-        interp_order: Interpolation order for the rotation. See skimage rotate function.
-        border_mode : Pixel extrapolation method for handling the borders. 
-                    See skimage rotate function.
-            
-        Returns
-        -------
-        rotated_array : Resulting frame.
-
-    '''
-    dtype = array.dtype
-    dims  = array.shape
-    angle_rad = -np.deg2rad(angle)
-
-    if center is None:
-        center = (np.array(dims)-1) / 2 # The minus 1 is because of python indexation at 0
-    
-    x, y = np.meshgrid(np.arange(dims[1], dtype=dtype), np.arange(dims[0], dtype=dtype))
-
-    xp = (x-center[1])*np.cos(angle_rad) + (y-center[0])*np.sin(angle_rad) + center[1]
-    yp = -(x-center[1])*np.sin(angle_rad) + (y-center[0])*np.cos(angle_rad) + center[0]
-
-    rotated_array = ndimage.map_coordinates(array, [yp, xp], mode=mode, cval=cval, order=order)
-    
-    return rotated_array
-
-
-def shift_interp(array, shift_value, mode='constant', cval=0, order=3):
-    ''' Shifts a frame or 2D array. From Vigan imutil toolbox
-        
-        Parameters
-        ----------
-        array : Input image, 2d array.
-        shift_value : array/list/tuple of two elements with the offsets.
-    
-            
-        Returns
-        -------
-        shifted : Resulting frame.
-
-    '''
-    Ndim  = array.ndim
-    dims  = array.shape
-    dtype = array.dtype.kind
-
-    if (Ndim == 1):
-        pass
-    elif (Ndim == 2):
-        x, y = np.meshgrid(np.arange(dims[1], dtype=dtype), np.arange(dims[0], dtype=dtype))
-
-        x -= shift_value[0]
-        y -= shift_value[1]
-
-        shifted = ndimage.map_coordinates(array, [y, x], mode=mode, cval=cval, order=order)
-
-    return shifted
-
 
 def reg_criterion(parameters, image, template, mask):    
     dx, dy, nu = parameters
     return np.sum((nu * shift_interp(image, [dx, dy]) - template)[mask]**2)
-
-
-
-def resize_list_limits(len1, len2, cent1=None):
-    """
-    Computes the inner and outer indices to resize a list to a given length.
-    The returned indices ensure that the boudaries of the list are not exceeded.
-    If the list is croped, the returned indices are centered on the input list center.
-
-    Parameters
-    ----------
-    len1 : INT
-        Length of the input list.
-    len2 : INT
-        Length of the resized list.
-
-    Returns
-    -------
-    inner, outer: indices in the input list to resize it.
-
-    """
-    if cent1 is None:
-        cent1 = len1//2
-    inner = np.max([cent1 - len2//2, 0])
-    outer = np.min([cent1 + len2//2 + len2%2, len1])
-    return inner, outer
-    
-    
-def resize(cube1, dim2, cent=[None,None]):
-    """ Resize a cube of images of arbitrary dimensions: crop it or adds zeros on the edges.
-    
-    Parameters
-    ----------
-    cube1 : ND numpy array wherre the last two dimensions correspond to the images size.
-    dim2 : list of two elements with the new shape of the array.
-        
-    Returns
-    -------
-    cube2 : ND numpy array with the last two dimensions resized to the requested shape.
-    
-    """  
-    dims = np.array(cube1.shape)
-    dim1 = dims[-2:]
-    x1i, x1f = resize_list_limits(dim1[0], dim2[0], cent1=cent[0])
-    y1i, y1f = resize_list_limits(dim1[1], dim2[1], cent1=cent[1])
-    
-    cube2 = np.zeros(np.concatenate((dims[:-2], dim2)))
-    x2i, x2f = resize_list_limits(dim2[0], x1f-x1i)
-    y2i, y2f = resize_list_limits(dim2[1], y1f-y1i)
-    
-    cube2[..., x2i:x2f, y2i:y2f] = cube1[..., x1i:x1f, y1i:y1f]
-    
-    return cube2
-
 
 
 def import_data_cube_from_files(file_list, scaling_list=None, ext=None, extname=None):
@@ -355,7 +100,7 @@ def median_filter_cube(cube, box_half_size, threshold, iter_max=10000, verbose=T
 
 
 def clean_bad_pixel_list(cube, bad_pixel_coords, method='zeros'):
-    dims = np.shape(cube)
+    # dims = np.shape(cube)
 
     # for i, inds in enumerate(nan_poses):
     #     cal2_sci_cube_bck_sub[inds[0], inds[1], inds[2], inds[3]] = 0
@@ -412,26 +157,15 @@ def display_grid_of_images_from_cube(cube, vmax, suptitle='', imtitle_array=None
     plt.show()
 
 
-def info(array, label='', show_mean=True, show_med=False, show_min=False, show_max=False):
-    print(label)
-    if show_mean: print('    Mean    : {}'.format(np.mean(array))) 
-    if show_med: print('    Median  : {}'.format(np.median(array))) 
-    if show_min: print('    Min     : {}'.format(np.min(array)))
-    if show_max: print('    Max     : {}'.format(np.max(array)))
-    print('    Std dev : {}'.format(np.std(array)))
-    print('    Max-Min : {}'.format(np.max(array) - np.min(array)))
-
-pixsize = 0.11
-
 #%% GLOBAL CONSTANTS
 
 pixsize = 0.11
-base_root = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets'
+base_root = '/Users/echoquet/Documents/Research/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets'
 
 targname_sci = 'HD 141569'
 targname_ref = 'HD 140986'
 targname_bck = ''
-filt = 'F1065C'
+filt = 'F1550C'
 
 #%% TARGET ACQ FILES
 print('\n##### PROCESSING THE TARGET ACQUISITION FILES ### ')
@@ -479,9 +213,9 @@ centroid_box_size_ta = 9
 centroid_method_ta = centroid_2dg #centroid_sources, centroid_com, centroid_quadratic,centroid_2dg, centroid_1dg
 
 ## Parameters for saving the data
-export_centroid_coordinates = True
-export_combined_ta = True
-overWriteTAQ = True
+export_centroid_coordinates = False
+export_combined_ta = False
+overWriteTAQ = False
 combined_ta_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_TA_combined'
 
 
@@ -926,6 +660,8 @@ if data_type == '*_uncal.fits':
 #%% CAL 1 DATA INSPECTION
 if inspec_cal1:
     print('##### CAL 1 DATA INSPECTION #####')
+    cal1_sci_files = selected_sci_files
+    cal1_ref_files = selected_ref_files
     
     # SCIENCE DATASETS COUNTRATES
     cal1_sci_cube = import_data_cube_from_files(cal1_sci_files) 
@@ -966,12 +702,12 @@ if inspec_cal1:
     
     int_index = 0
     ncol = 2
-    nrow = int(np.ceil(len(cal1_ref_files)/2))
+    nrow = int(np.ceil(len(cal1_ref_cube)/2))
     fig3, ax3 = plt.subplots(nrow, ncol,figsize=(8,6), dpi=130)
     ax3[-1, -1].axis('off')
     fig3.suptitle('CAL 1 REFSTAR  '+filt)
     images = []
-    for i in range(len(cal1_ref_files)):
+    for i in range(len(cal1_ref_cube)):
         irow = i%nrow
         icol = i//nrow
         images.append(ax3[irow, icol].imshow(cal1_ref_cube[i,int_index,:,:], vmin=vmin, vmax=vmax))
@@ -1129,9 +865,9 @@ bck_mask_size = 201
 bck_mask_Rin_sci = 50
 bck_mask_Rin_ref = 65
 # bck_mask_Rout = 105
-bck_saber_glow_mask = True
-bck_saber_glow_width = 9 #pix
-bck_saber_glow_angle = 5 #deg
+mask_glowstick = True
+glowstick_width = 9 #pix
+glowstick_angle = 5 #deg
 
 
 ## Parameters for star-centering
@@ -1162,15 +898,15 @@ mask_4qpm_Q = False
 fqpm_width = 3 #pix
 fqpm_angle = 5 #deg
 
-cropsize = 101
+cropsize = 131
 
 # Parameters for exporting the outputs
 export_tmp_filesQ = False
-saveCombinedImageQ = False
+saveCombinedImageQ = True
 overWriteQ = True
 save_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_PROCESSED'
 
-basename_sci = 'HD141569_'+filt+'_v4'
+basename_sci = 'HD141569_'+filt+'_v5'
 filename_output = basename_sci + '_combined.fits'
 
 
@@ -1226,10 +962,10 @@ if bck_subtraction_method == 'uniform':
     bck_mask_sci = create_mask(bck_mask_Rin_sci, dims, cent=fqpm_center) * bck_mask_box
     bck_mask_sci *= create_mask(bck_mask_Rin_sci, dims, cent=companion_stars_coords)
     bck_mask_ref = create_mask(bck_mask_Rin_ref, dims, cent=fqpm_center) * bck_mask_box
-    if bck_saber_glow_mask:
-        bck_saber_mask = create_saber_mask(dims, np.round(fqpm_center).astype(int), bck_saber_glow_width, bck_saber_glow_angle)
-        bck_mask_sci = bck_mask_sci * bck_saber_mask
-        bck_mask_ref = bck_mask_ref * bck_saber_mask
+    if mask_glowstick:
+        glowstick_mask = create_glowstick_mask(dims, np.round(fqpm_center).astype(int), glowstick_width, glowstick_angle)
+        bck_mask_sci = bck_mask_sci * glowstick_mask
+        bck_mask_ref = bck_mask_ref * glowstick_mask
     
     if display_all:
         fig10, ax10 = plt.subplots(1,1,figsize=(8,6), dpi=130)
@@ -1404,7 +1140,7 @@ elif psf_subtraction_method =='classical-Ref-Averaged':
     ref_average = sci_ref_th_ratio * np.mean(cal2_ref_cube_centered, axis=(0,1))
     cal2_sci_cube_psf_sub = cal2_sci_cube_centered - np.tile(ref_average, (n_sci_files, n_sci_int, 1, 1))
 
-if display_all:
+if display_all and (psf_subtraction_method =='classical-Ref-Averaged'):
     vmax = 35 #3 #max_val*0.7
     fig9, ax9 = plt.subplots(1,2,figsize=(10,6), dpi=130)
     im = ax9[0].imshow(cal2_sci_cube_centered[0,0], norm=LogNorm(vmin=vmax/500, vmax=vmax))
