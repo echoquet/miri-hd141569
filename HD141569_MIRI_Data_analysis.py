@@ -11,7 +11,7 @@ import numpy as np
 # from skimage.transform import rotate
 import scipy.ndimage as ndimage
 
-from imtoolbox import *
+import imtoolbox as tb
 
 from scipy.optimize import minimize
 from copy import deepcopy
@@ -27,7 +27,7 @@ plt.rcParams["image.cmap"] = 'gist_heat'#'hot'#'copper'
 
 def reg_criterion(parameters, image, template, mask):    
     dx, dy, nu = parameters
-    return np.sum((nu * shift_interp(image, [dx, dy]) - template)[mask]**2)
+    return np.sum((nu * tb.shift_interp(image, [dx, dy]) - template)[mask]**2)
 
 
 def import_data_cube_from_files(file_list, scaling_list=None, ext=None, extname=None):
@@ -284,7 +284,7 @@ print('\nBAckground subtraction (REF and SCI TAs)')
 target_acq_ref_cube_masked = deepcopy(target_acq_ref_cube_clean)
 for i in range(n_ref_ta):
     mask_ta_ref_stars = np.ones(dims_ta, dtype=bool) 
-    mask_ta_ref_stars *= create_mask(rIn_mask_BC, dims_ta, cent=[rough_ta_ypos_REF[i], rough_ta_xpos_REF[i]])
+    mask_ta_ref_stars *= tb.create_mask(rIn_mask_BC, dims_ta, cent=[rough_ta_ypos_REF[i], rough_ta_xpos_REF[i]])
     target_acq_ref_cube_masked[i, ~mask_ta_ref_stars] = np.nan
 target_acq_ref_median_bckg = np.nanmedian(target_acq_ref_cube_masked, axis=0)
 
@@ -299,9 +299,9 @@ plt.show()
 target_acq_sci_cube_masked = deepcopy(target_acq_sci_cube_clean)
 for i in range(n_sci_ta_cent):
     mask_ta_sci_stars = np.ones(dims_ta, dtype=bool) 
-    mask_ta_sci_stars *= create_mask(rIn_mask_A, dims_ta, cent=[rough_ta_ypos_ABC[i,0], rough_ta_xpos_ABC[i,0]])
-    mask_ta_sci_stars *= create_mask(rIn_mask_BC, dims_ta, cent=[rough_ta_ypos_ABC[i,1], rough_ta_xpos_ABC[i,1]])
-    mask_ta_sci_stars *= create_mask(rIn_mask_BC, dims_ta, cent=[rough_ta_ypos_ABC[i,2], rough_ta_xpos_ABC[i,2]])
+    mask_ta_sci_stars *= tb.create_mask(rIn_mask_A, dims_ta, cent=[rough_ta_ypos_ABC[i,0], rough_ta_xpos_ABC[i,0]])
+    mask_ta_sci_stars *= tb.create_mask(rIn_mask_BC, dims_ta, cent=[rough_ta_ypos_ABC[i,1], rough_ta_xpos_ABC[i,1]])
+    mask_ta_sci_stars *= tb.create_mask(rIn_mask_BC, dims_ta, cent=[rough_ta_ypos_ABC[i,2], rough_ta_xpos_ABC[i,2]])
     target_acq_sci_cube_masked[i, ~mask_ta_sci_stars] = np.nan
 target_acq_sci_median_bckg = np.nanmedian(target_acq_sci_cube_masked, axis=0)
 
@@ -453,8 +453,8 @@ center_ta_images = (np.array(target_acq_sci_cube_clean.shape[1:])-1)//2
 target_acq_sci_cube_centered_derotated = np.empty(np.shape(target_acq_sci_cube_clean))
 for i, ta_image in enumerate (target_acq_sci_cube_clean):
     shfit_values = np.array([fine_ta_xpos_ABC[i,central_star_index] - center_ta_images[1], fine_ta_ypos_ABC[i,central_star_index] - center_ta_images[0]])
-    ta_image_centered = shift_interp(ta_image, -shfit_values)
-    ta_image_derotated = frame_rotate_interp(ta_image_centered, -selected_TA_sci_PA_V3_cent[i], center=center_ta_images)
+    ta_image_centered = tb.shift_interp(ta_image, -shfit_values)
+    ta_image_derotated = tb.frame_rotate_interp(ta_image_centered, -selected_TA_sci_PA_V3_cent[i], center=center_ta_images)
     target_acq_sci_cube_centered_derotated[i] = ta_image_derotated
 
 # display_grid_of_images_from_cube(target_acq_sci_cube_centered_derotated, vmax_ta, logNorm=False, 
@@ -594,7 +594,7 @@ if data_type == '*_uncal.fits':
     
     
     
-    mask_cent = ~create_mask(15, dim, cent=[110,120])
+    mask_cent = ~tb.create_mask(15, dim, cent=[110,120])
     max_val = np.max(raw_sci_cube[0,0,-1,:,:]*mask_cent)
     median_val = np.median(raw_sci_cube[0,0,-1,:,:])
     print('Median value: ', median_val)
@@ -670,7 +670,7 @@ if inspec_cal1:
     print('Image dimensions: {}'.format(dim))
     
     
-    mask_cent = ~create_mask(15, dim, cent=[110,120])
+    mask_cent = ~tb.create_mask(15, dim, cent=[110,120])
     max_val = np.max(cal1_sci_cube[0,0,:,:]*mask_cent)
     median_val = np.median(cal1_sci_cube[0,0,:,:])
     print('Median value: ', median_val)
@@ -902,8 +902,8 @@ cropsize = 131
 
 # Parameters for exporting the outputs
 export_tmp_filesQ = False
-saveCombinedImageQ = True
-overWriteQ = True
+saveCombinedImageQ = False
+overWriteQ = False
 save_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_PROCESSED'
 
 basename_sci = 'HD141569_'+filt+'_v5'
@@ -958,12 +958,12 @@ print('    Subtraction method: {}'.format(bck_subtraction_method))
 if bck_subtraction_method == 'uniform':  
     companion_stars_coords = fqpm_center + np.array([-90, 20])
     bck_mask_sizes = np.array((bck_mask_size, bck_mask_size))
-    bck_mask_box = ~create_box_mask(dims, np.round(fqpm_center).astype(int), bck_mask_sizes)
-    bck_mask_sci = create_mask(bck_mask_Rin_sci, dims, cent=fqpm_center) * bck_mask_box
-    bck_mask_sci *= create_mask(bck_mask_Rin_sci, dims, cent=companion_stars_coords)
-    bck_mask_ref = create_mask(bck_mask_Rin_ref, dims, cent=fqpm_center) * bck_mask_box
+    bck_mask_box = ~tb.create_box_mask(dims, np.round(fqpm_center).astype(int), bck_mask_sizes)
+    bck_mask_sci = tb.create_mask(bck_mask_Rin_sci, dims, cent=fqpm_center) * bck_mask_box
+    bck_mask_sci *= tb.create_mask(bck_mask_Rin_sci, dims, cent=companion_stars_coords)
+    bck_mask_ref = tb.create_mask(bck_mask_Rin_ref, dims, cent=fqpm_center) * bck_mask_box
     if mask_glowstick:
-        glowstick_mask = create_glowstick_mask(dims, np.round(fqpm_center).astype(int), glowstick_width, glowstick_angle)
+        glowstick_mask = tb.create_glowstick_mask(dims, np.round(fqpm_center).astype(int), glowstick_width, glowstick_angle)
         bck_mask_sci = bck_mask_sci * glowstick_mask
         bck_mask_ref = bck_mask_ref * glowstick_mask
     
@@ -1102,7 +1102,7 @@ for i in range(n_sci_files):
         print(message.format(i, j, estimated_xpos_A, estimated_ypos_A, estimated_xpos_A-fqpm_center[1], estimated_ypos_A-fqpm_center[0]))
         
         shift_values = np.array([estimated_xpos_A - im_center[1], estimated_ypos_A - im_center[0]])
-        cal2_sci_cube_centered[i,j] = shift_interp(cal2_sci_cube_bck_sub[i,j], -shift_values)
+        cal2_sci_cube_centered[i,j] = tb.shift_interp(cal2_sci_cube_bck_sub[i,j], -shift_values)
         
 pointing_error_means = np.mean(pointing_error_list, axis=1)
 print('    -- Mean Pointing Error of A / X-axis: ROll 1: {:.3f} - ROll 2: {:.3f} pix'.format(pointing_error_means[0,0], pointing_error_means[1,0]))
@@ -1122,7 +1122,7 @@ cal2_ref_cube_centered = np.empty(np.shape(cal2_ref_cube_bck_sub))
 for i in range(n_ref_files):
     for j in range(n_ref_int):
         shift_values = np.array([fqpm_center[1] - im_center[1], fqpm_center[0] - im_center[0]])
-        cal2_ref_cube_centered[i,j] = shift_interp(cal2_ref_cube_bck_sub[i,j], -shift_values)
+        cal2_ref_cube_centered[i,j] = tb.shift_interp(cal2_ref_cube_bck_sub[i,j], -shift_values)
         
 
 
@@ -1173,14 +1173,14 @@ display_grid_of_images_from_cube(combined_roll_images, vmax, #logNorm=False,
 print('--- Derotate and combine rolls ---')
 derotated_images = np.empty(np.shape(combined_roll_images))
 for i in range(n_sci_files):
-    derotated_images[i] = frame_rotate_interp(combined_roll_images[i], -PA_V3_sci[i], center=star_center_sci)
+    derotated_images[i] = tb.frame_rotate_interp(combined_roll_images[i], -PA_V3_sci[i], center=star_center_sci)
 
 
 #TODO : Make the 4QPM mask centered on float values.
 if mask_4qpm_Q:
     fqpm_masks = np.empty((n_sci_files, dims[0], dims[1]), dtype=bool)
     for i, roll_angle in enumerate(PA_V3_sci):
-        fqpm_masks[i] = create_fqpm_mask(dims, im_center, fqpm_width, fqpm_angle-roll_angle)
+        fqpm_masks[i] = tb.create_fqpm_mask(dims, im_center, fqpm_width, fqpm_angle-roll_angle)
     derotated_images[~fqpm_masks] = np.nan
 
 display_grid_of_images_from_cube(derotated_images, vmax, #logNorm=False,
@@ -1190,7 +1190,7 @@ display_grid_of_images_from_cube(derotated_images, vmax, #logNorm=False,
 
 ### Combine the two rolls and crop it
 combined_image_full = np.nanmean(derotated_images, axis=0)
-combined_image = resize(combined_image_full, [cropsize,cropsize], cent=np.round(star_center_sci).astype(int)) 
+combined_image = tb.resize(combined_image_full, [cropsize,cropsize], cent=np.round(star_center_sci).astype(int)) 
 
 
 print('Total flux in image: {:.3f} mJy'.format(np.nansum(combined_image)*0.11*0.11))
