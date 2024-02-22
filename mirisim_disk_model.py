@@ -27,6 +27,8 @@ from webbpsf_ext import miri_filter
 from webbpsf_ext.coords import jwst_point, plotAxes    #class to setup pointing info
 from webbpsf_ext.image_manip import pad_or_cut_to_size
 
+import anadisk_mod as disk
+
 plt.rcParams['image.origin'] = 'lower'
 plt.rcParams["image.cmap"] = 'gist_heat'#'hot'#'copper'
 
@@ -547,9 +549,9 @@ filt = f'F{mask_id}C'
 # Set desired PSF size and oversampling
 # MIRI 4QPM: 24" x24" at 0.11 pixels, so 219x219 pixels
 # MIRISim synthetic datasets: 224 x 288
-fov_pix = 100
+fov_pix = 130
 osamp = 2
-cropsize = 85
+cropsize = 130
 
 # Observations structure and parameters
 if mask_id == '1065':
@@ -634,8 +636,8 @@ disk_params = {
 #%% Get the observed, combined MIRI image
 # these data are in mJy/arcsec2
 
-path_MIRI_data = '/Users/echoquet/Documents/Research/Astro/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_PROCESSED'
-miri_data_filename = 'HD141569_{}_v4_combined.fits'.format(filt)
+path_MIRI_data = '/Users/echoquet/Documents/Research/JWST_Programs/Cycle-1_ERS-1386_Hinkley/Disk_Work/2021-10_Synthetic_Datasets/4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_PROCESSED'
+miri_data_filename = 'HD141569_{}_v5_combined.fits'.format(filt)
 
 miri_data_full = fits.getdata(os.path.join(path_MIRI_data, miri_data_filename)) 
 
@@ -659,12 +661,17 @@ pixscale = inst.pixelscale
 
 # Calculate PSF coefficients, or import them if already computed.
 # Can take a while if need to be calculated
+t0 = time()
 inst.gen_psf_coeff()
+t1 = time()
+print('\n Generate (or import) PSF coefficients: {} s'.format(t1-t0))
 
 # Calculate position-dependent PSFs due to FQPM
 # Equivalent to generating a giant library to interpolate over
+t0 = time()
 inst.gen_wfemask_coeff()
-
+t1 = time()
+print('\n Fit WFE changes in mask position Calculation time: {} s'.format(t1-t0))
 
 
 ### Calculate the grid of PSFs for extended objects convolution
@@ -748,6 +755,73 @@ disk_params = {
     'cen_star' : (not remove_central_star),
 }
 
+#%% Disk model creation from GRATER
+
+
+export_input_model = False
+export_folder = 'whatever'
+export_fileName = 'whatever'
+
+imsize = 210.
+pixscale_model = 0.055
+lbd = 11.24 #um
+distance_model = 111.6
+
+# Disk model parameters
+pixscale_Visir = 0.045 #as
+g1 = 0.
+radius = 6.095 * pixscale_Visir * distance_model # in au. Radius from Yinuo's PAH2 (11.24um) in VISIR pixels (0.045")
+# radius = 3.3 * distance_model
+inclination = 50.0  # same as Yinuo. Note Perrot2016 is 56.9deg
+pos_angle = 360-3.0 # same as Yinuo. Note Perrot2016 is 356.1deg, ie -3.9deg
+flux_density = 8.018e-04 * pixscale_model / pixscale_Visir  #in Jy/pix; from Yinuo's PAH2 fit of the VISIR image. 
+asp_ratio = 0.04
+beta_out = 2.0
+beta_in = -10.0 
+los_factor = 4.0
+
+centerPix_model = np.array([imsize//2, imsize//2]) - 1.5
+
+# Simulate disk image
+spf = (lambda x: disk.hg_phase_function(x, g1))
+disk_model_raw = disk.generate_disk(imsize, pixscale_model, distance_model, 
+                                    radius, spf, 
+                                    psfcenx = centerPix_model[0], psfceny = centerPix_model[1],
+                                    inc=inclination, pa=pos_angle, aspect_ratio=asp_ratio, 
+                                    beta_out=beta_out, beta_in=beta_in, 
+                                    los_factor=los_factor)
+disk_model_raw *= flux_density / np.max(disk_model_raw)
+
+fig10, ax10 = plt.subplots(1,1,figsize=(18,6))
+im10 = ax10.imshow(disk_model_raw, vmax=flux_density)
+
+
+fig11, ax11 = plt.subplots(1,1,figsize=(18,6))
+im11 = ax11.imshow(disk_model_raw, norm=LogNorm(vmin=flux_density/100000, vmax=flux_density))
+
+
+# Package the image in a HDU format with necessary keywords:
+hdul_input_model = fits.HDUList(fits.PrimaryHDU(data=disk_model_raw))
+hdul_input_model[0].header['BUNIT'] = 'Jy.pixel-1'
+hdul_input_model[0].header['WAVE'] = lbd
+
+
+# Optionally export the simulated model
+if export_input_model:
+    hdul_input_model.writeto(os.path.join(export_folder, export_fileName), overwrite=True)
+    
+
+
+#packaging the output:
+disk_params = {
+    'simulate': True,
+    'cen_star' : False,
+    'dist' : distance_model,
+    'pixscale': pixscale_model, 
+    'wavelength': lbd, 
+    'units': 'Jy/pixel',
+    'file': hdul_input_model,
+}
 
 
 
@@ -848,7 +922,7 @@ print('Total Calculation time for full disk image creation: {}s'.format(t22-t00)
 scaling_coef = np.sum(miri_data**2)/np.sum(miri_data * model_image_units)
 model_image_scalled = scaling_coef*model_image_units
 diff_miri_minus_model = miri_data - model_image_scalled
-print(os.path.basename(path_model))
+# print(os.path.basename(path_model))
 print('Best Scaling coefficient: {}'.format(scaling_coef))
 print('chi2: {:.1f}'.format(np.sum(diff_miri_minus_model**2)))
 
