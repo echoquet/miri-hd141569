@@ -838,7 +838,7 @@ display_grid_of_images_from_cube(cal2_bck_ref_cube, vmax, logNorm=False,
 display_all = True
 verbose = False
 
-discard_first_ints = True
+discard_first_ints = False
 
 ## Parameters for Median-filtering the bad pixels:
 median_filt_thresh = 3 #sigma
@@ -860,7 +860,7 @@ elif filt == 'F1550C':
 
 
 ## Parameters for background subtraction: 
-bck_subtraction_method = 'bck_frames'   # 'uniform'  'bck_frames'  'bck_frames_combo_from_Max'
+bck_subtraction_method = 'bck_frames_cube'   # 'uniform'  'bck_frames_median' 'bck_frames_cube' 'bck_frames_combo_from_Max'
 bck_mask_size = 201
 bck_mask_Rin_sci = 50
 bck_mask_Rin_ref = 65
@@ -906,7 +906,7 @@ saveCombinedImageQ = False
 overWriteQ = False
 save_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_PROCESSED'
 
-basename_sci = 'HD141569_'+filt+'_v5'
+basename_sci = 'HD141569_'+filt+'_v7'
 filename_output = basename_sci + '_combined.fits'
 
 
@@ -985,7 +985,7 @@ if bck_subtraction_method == 'uniform':
     bck_tile_sci = np.tile(bck_level_sci, (n_sci_files, n_sci_int, dims[0], dims[1]))
     bck_tile_ref = np.tile(bck_level_ref, (n_ref_files, n_ref_int, dims[0], dims[1]))
 
-elif bck_subtraction_method == 'bck_frames':
+elif bck_subtraction_method == 'bck_frames_median':
     bck_level_sci = np.median(cal2_bck_sci_cube_clean, axis=(0,1))
     bck_level_ref = np.median(cal2_bck_ref_cube_clean, axis=(0,1))
     
@@ -993,11 +993,26 @@ elif bck_subtraction_method == 'bck_frames':
     bck_tile_ref = np.tile(bck_level_ref, (n_ref_files, n_ref_int, 1, 1))
 
 
+elif bck_subtraction_method == 'bck_frames_cube':
+    bck_level_sci = np.median(cal2_bck_sci_cube_clean, axis=(0))
+    bck_level_ref = np.median(cal2_bck_ref_cube_clean, axis=(0))
+    
+    bck_tile_sci = np.tile(bck_level_sci, (n_sci_files, 1, 1, 1))
+    bck_tile_ref = np.tile(bck_level_ref, (n_ref_files, 1, 1, 1))
+
+
+
 print('Background_level SCI = {:.2e} mJy.arcsec^-2'.format(np.nanmean(bck_tile_sci)))
 print('Background_level REF = {:.2e} mJy.arcsec^-2'.format(np.nanmean(bck_tile_ref)))
 
 cal2_sci_cube_bck_sub = cal2_sci_cube_clean - bck_tile_sci
 cal2_ref_cube_bck_sub = cal2_ref_cube_clean - bck_tile_ref
+
+cal2_sci_stamps = cal2_sci_cube_bck_sub[:,:,180:215,30:100]*1000.
+cal2_ref_stamps = cal2_ref_cube_bck_sub[:,:,180:215,30:100]*1000.
+print('Background-subtracted dark zone SCI = {:.2f}+/-{:.2f} muJy.arcsec^-2'.format(np.nanmean(cal2_sci_stamps),np.nanstd(cal2_sci_stamps)))
+print('Background-subtracted dark zone REF = {:.2f}+/-{:.2f} muJy.arcsec^-2'.format(np.nanmean(cal2_ref_stamps),np.nanstd(cal2_ref_stamps)))
+
 
 display_grid_of_images_from_cube(cal2_sci_cube_bck_sub, vmax/3, #logNorm=False,
                                  suptitle='Background subtracted Integrations HD141569  '+filt)
@@ -1007,7 +1022,7 @@ display_grid_of_images_from_cube(cal2_ref_cube_bck_sub, vmax/3, #logNorm=False,
 
 if export_tmp_filesQ:
     print('    Exporting the background subtracted data:')
-    path_tmp_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_Background_subtracted'
+    path_tmp_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_Background_subtracted_Cube-sub'
     path_tmp_output = os.path.join(base_root, path_tmp_folder)
     print(path_tmp_output)
     
@@ -1019,6 +1034,13 @@ if export_tmp_filesQ:
         hdu2.header['BUNIT']= 'mJy/arcsec2'
         hdul = fits.HDUList([hdu,hdu2])
         hdul.writeto(os.path.join(path_tmp_output, filename_tmp_output), overwrite=overWriteQ)
+        
+        #Combined integrations 
+        filename_tmp_output_combined = cal2_filename[:-5] + '_bckgrd-sub_combined' + cal2_filename[-5:] 
+        hdu3 = fits.ImageHDU(np.nanmean(obs, axis=0),fits.getheader(cal2_sci_files[i], 1))
+        hdu3.header['BUNIT']= 'mJy/arcsec2'
+        hdulc = fits.HDUList([hdu,hdu3])
+        hdulc.writeto(os.path.join(path_tmp_output, filename_tmp_output_combined), overwrite=overWriteQ)
     
     for i, obs in enumerate(cal2_ref_cube_bck_sub):
         cal2_filename = os.path.basename(cal2_ref_files[i])
@@ -1028,6 +1050,13 @@ if export_tmp_filesQ:
         hdu2.header['BUNIT']= 'mJy/arcsec2'
         hdul = fits.HDUList([hdu,hdu2])
         hdul.writeto(os.path.join(path_tmp_output, filename_tmp_output), overwrite=overWriteQ)
+        
+        #Combined integrations 
+        filename_tmp_output_combined = cal2_filename[:-5] + '_bckgrd-sub_combined' + cal2_filename[-5:] 
+        hdu3 = fits.ImageHDU(np.nanmean(obs, axis=0),fits.getheader(cal2_ref_files[i], 1))
+        hdu3.header['BUNIT']= 'mJy/arcsec2'
+        hdulc = fits.HDUList([hdu,hdu3])
+        hdulc.writeto(os.path.join(path_tmp_output, filename_tmp_output_combined), overwrite=overWriteQ)
     
 
 
