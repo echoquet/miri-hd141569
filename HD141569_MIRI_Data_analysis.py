@@ -165,7 +165,7 @@ base_root = '/Users/echoquet/Documents/Research/JWST_Programs/Cycle-1_ERS-1386_H
 targname_sci = 'HD 141569'
 targname_ref = 'HD 140986'
 targname_bck = ''
-filt = 'F1550C'
+filt = 'F1065C'
 
 #%% TARGET ACQ FILES
 print('\n##### PROCESSING THE TARGET ACQUISITION FILES ### ')
@@ -860,7 +860,7 @@ elif filt == 'F1550C':
 
 
 ## Parameters for background subtraction: 
-bck_subtraction_method = 'bck_frames_cube'   # 'uniform'  'bck_frames_median' 'bck_frames_cube' 'bck_frames_combo_from_Max'
+bck_subtraction_method = 'bck_frames_median_scaled'   # 'uniform'  'bck_frames_median' 'bck_frames_cube' 'bck_frames_combo_from_Max'
 bck_mask_size = 201
 bck_mask_Rin_sci = 50
 bck_mask_Rin_ref = 65
@@ -992,13 +992,39 @@ elif bck_subtraction_method == 'bck_frames_median':
     bck_tile_sci = np.tile(bck_level_sci, (n_sci_files, n_sci_int, 1, 1))
     bck_tile_ref = np.tile(bck_level_ref, (n_ref_files, n_ref_int, 1, 1))
 
-
 elif bck_subtraction_method == 'bck_frames_cube':
     bck_level_sci = np.median(cal2_bck_sci_cube_clean, axis=(0))
     bck_level_ref = np.median(cal2_bck_ref_cube_clean, axis=(0))
     
     bck_tile_sci = np.tile(bck_level_sci, (n_sci_files, 1, 1, 1))
     bck_tile_ref = np.tile(bck_level_ref, (n_ref_files, 1, 1, 1))
+
+elif bck_subtraction_method == 'bck_frames_median_scaled':
+    bck_level_sci = np.median(cal2_bck_sci_cube_clean, axis=(0,1))
+    bck_level_ref = np.median(cal2_bck_ref_cube_clean, axis=(0,1))
+    
+    bck_tile_sci = np.tile(bck_level_sci, (n_sci_files, n_sci_int, 1, 1))
+    bck_tile_ref = np.tile(bck_level_ref, (n_ref_files, n_ref_int, 1, 1))
+    
+    bck_scale_coef_sci = np.nansum((cal2_sci_cube_clean * bck_tile_sci)[:,:,180:215,30:100], axis=(2,3))/np.nansum((bck_tile_sci * bck_tile_sci)[:,:,180:215,30:100], axis=(2,3))
+    bck_scale_coef_ref = np.nansum((cal2_ref_cube_clean * bck_tile_ref)[:,:,180:215,30:100], axis=(2,3))/np.nansum((bck_tile_ref * bck_tile_ref)[:,:,180:215,30:100], axis=(2,3))
+    
+    bck_tile_sci *= np.moveaxis(np.tile(bck_scale_coef_sci, (dims[0], dims[1], 1, 1)), [0,1], [-2,-1])
+    bck_tile_ref *= np.moveaxis(np.tile(bck_scale_coef_ref, (dims[0], dims[1], 1, 1)), [0,1], [-2,-1])
+
+    
+elif bck_subtraction_method == 'bck_frames_cube_scaled':
+    bck_level_sci = np.median(cal2_bck_sci_cube_clean, axis=(0))
+    bck_level_ref = np.median(cal2_bck_ref_cube_clean, axis=(0))
+    
+    bck_tile_sci = np.tile(bck_level_sci, (n_sci_files, 1, 1, 1))
+    bck_tile_ref = np.tile(bck_level_ref, (n_ref_files, 1, 1, 1))
+    
+    bck_scale_coef_sci = np.nansum((cal2_sci_cube_clean * bck_tile_sci)[:,:,180:215,30:100], axis=(2,3))/np.nansum((bck_tile_sci * bck_tile_sci)[:,:,180:215,30:100], axis=(2,3))
+    bck_scale_coef_ref = np.nansum((cal2_ref_cube_clean * bck_tile_ref)[:,:,180:215,30:100], axis=(2,3))/np.nansum((bck_tile_ref * bck_tile_ref)[:,:,180:215,30:100], axis=(2,3))
+    
+    bck_tile_sci *= np.moveaxis(np.tile(bck_scale_coef_sci, (dims[0], dims[1], 1, 1)), [0,1], [-2,-1])
+    bck_tile_ref *= np.moveaxis(np.tile(bck_scale_coef_ref, (dims[0], dims[1], 1, 1)), [0,1], [-2,-1])
 
 
 
@@ -1022,8 +1048,8 @@ display_grid_of_images_from_cube(cal2_ref_cube_bck_sub, vmax/3, #logNorm=False,
 
 if export_tmp_filesQ:
     print('    Exporting the background subtracted data:')
-    path_tmp_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_Background_subtracted_Cube-sub'
-    path_tmp_output = os.path.join(base_root, path_tmp_folder)
+    path_tmp_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_Background_subtracted'
+    path_tmp_output = os.path.join(base_root, path_tmp_folder, bck_subtraction_method)
     print(path_tmp_output)
     
     for i, obs in enumerate(cal2_sci_cube_bck_sub):
