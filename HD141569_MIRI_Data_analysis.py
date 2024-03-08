@@ -1137,6 +1137,9 @@ if display_all:
 print('    -- Pointing stability from B / X-axis: std < {:.5f} pix'.format(np.max(np.std(fine_xpos_BC[:,:,0], axis=1))))
 print('    -- Pointing stability from B / Y-axis: std < {:.5f} pix'.format(np.max(np.std(fine_ypos_BC[:,:,0], axis=1))))
 
+print('    -- Pointing stability from C / X-axis: std < {:.5f} pix'.format(np.max(np.std(fine_xpos_BC[:,:,1], axis=1))))
+print('    -- Pointing stability from C / Y-axis: std < {:.5f} pix'.format(np.max(np.std(fine_ypos_BC[:,:,1], axis=1))))
+
 
 # Patch to remove nan values before interpolating the data
 # nan_poses = np.argwhere(np.isnan(cal2_sci_cube_bck_sub))
@@ -1145,6 +1148,7 @@ print('    -- Pointing stability from B / Y-axis: std < {:.5f} pix'.format(np.ma
     
 print('    Register the SCI frames:')
 # Shifting the SCI images in order to place the star center at the center of the FOV
+# ! this part doesn't account for distortion.
 im_center = (np.array(dims)-1)//2   #fqpm_center #(np.array(dims)-1)//2
 pointing_error_list = np.empty((n_sci_files, n_sci_int, 2))
 cal2_sci_cube_centered = np.empty(np.shape(cal2_sci_cube_bck_sub))
@@ -1191,15 +1195,28 @@ star_center_ref = im_center
 # TODO: implement subtraction with the separate REF dither frames (lower noise but better subtraction?)
 if psf_subtraction_method == 'No-Subtraction':
     cal2_sci_cube_psf_sub = cal2_sci_cube_centered
-elif psf_subtraction_method =='classical-Ref-Averaged':
-    ref_average = sci_ref_th_ratio * np.mean(cal2_ref_cube_centered, axis=(0,1))
-    cal2_sci_cube_psf_sub = cal2_sci_cube_centered - np.tile(ref_average, (n_sci_files, n_sci_int, 1, 1))
 
-if display_all and (psf_subtraction_method =='classical-Ref-Averaged'):
+elif psf_subtraction_method =='crdi_mean-dithers_star-sed-scaling':
+    ref_average = np.mean(cal2_ref_cube_centered, axis=(0,1))
+    ref_average_tile = np.tile(ref_average, (n_sci_files, n_sci_int, 1, 1))
+    ref_average_scaled = sci_ref_th_ratio * ref_average_tile
+    cal2_sci_cube_psf_sub = cal2_sci_cube_centered - ref_average_scaled
+    print('PSF scaling coefficient: {:.2f}'.format(sci_ref_th_ratio))
+
+elif psf_subtraction_method =='crdi_mean-dithers_min-residuals-scaling':
+    ref_average = np.mean(cal2_ref_cube_centered, axis=(0,1))
+    ref_average_tile = np.tile(ref_average, (n_sci_files, n_sci_int, 1, 1))
+    ref_average_coefs = np.nansum((cal2_sci_cube_centered * ref_average_tile)[:,:,135:195,191:285], axis=(2,3))/np.nansum((ref_average_tile * ref_average_tile)[:,:,135:195,191:285], axis=(2,3))
+    ref_average_scaled = ref_average_tile * np.moveaxis(np.tile(ref_average_coefs, (dims[0], dims[1], 1, 1)), [0,1], [-2,-1])
+    cal2_sci_cube_psf_sub = cal2_sci_cube_centered - ref_average_scaled
+    print('PSF scaling coefficient: {:.2f}'.format(ref_average_coefs.mean()))
+
+
+if display_all and (psf_subtraction_method =='crdi_mean-dithers_star-sed-scaling'):
     vmax = 35 #3 #max_val*0.7
     fig9, ax9 = plt.subplots(1,2,figsize=(10,6), dpi=130)
     im = ax9[0].imshow(cal2_sci_cube_centered[0,0], norm=LogNorm(vmin=vmax/500, vmax=vmax))
-    im = ax9[1].imshow(ref_average, norm=LogNorm(vmin=vmax/500, vmax=vmax))
+    im = ax9[1].imshow(ref_average_scaled[0,0], norm=LogNorm(vmin=vmax/500, vmax=vmax))
     # im = ax7.imshow(combined_image, vmin=vmin_lin, vmax=vmax)
     ax9[0].set_title('HD141569  '+filt)
     ax9[1].set_title('Reference scaled  '+filt)
@@ -1208,6 +1225,29 @@ if display_all and (psf_subtraction_method =='classical-Ref-Averaged'):
     cbar.ax.set_title('mJy.arcsec$^{-2}$')
     plt.show()
 
+
+if export_tmp_filesQ:
+    print('    Exporting the PSF subtracted data:')
+    path_tmp_folder = '4_Real_JWST_Data/MIRI_ERS/MIRI_Data/MIRI_PSF_subtracted'
+    path_tmp_output = os.path.join(base_root, path_tmp_folder, psf_subtraction_method)
+    print(path_tmp_output)
+    
+    for i, obs in enumerate(cal2_sci_cube_psf_sub):
+        cal2_filename = os.path.basename(cal2_sci_files[i])
+        filename_tmp_output = cal2_filename[:-5] + '_psf-sub' + cal2_filename[-5:] 
+        hdu = fits.PrimaryHDU(data=None, header = fits.getheader(cal2_sci_files[i]))
+        hdu2 = fits.ImageHDU(obs,fits.getheader(cal2_sci_files[i], 1))
+        hdu2.header['BUNIT']= 'mJy/arcsec2'
+        hdul = fits.HDUList([hdu,hdu2])
+        hdul.writeto(os.path.join(path_tmp_output, filename_tmp_output), overwrite=overWriteQ)
+        
+        #Combined integrations 
+        filename_tmp_output_combined = cal2_filename[:-5] + '_psf-sub_combined' + cal2_filename[-5:] 
+        hdu3 = fits.ImageHDU(np.nanmean(obs, axis=0),fits.getheader(cal2_sci_files[i], 1))
+        hdu3.header['BUNIT']= 'mJy/arcsec2'
+        hdulc = fits.HDUList([hdu,hdu3])
+        hdulc.writeto(os.path.join(path_tmp_output, filename_tmp_output_combined), overwrite=overWriteQ)
+    
 
 
 ### Mean-combine integration within a roll (minimizes rotations)
